@@ -1,0 +1,12 @@
+{
+  "name": "waifu-tutor",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.12.3",
+  "scripts": {
+    "dev": "pnpm --filter @waifu-tutor/frontend dev",
+    "build": "pnpm --filter @waifu-tutor/shared build && pnpm --filter @waifu-tutor/frontend build",
+    "lint": "pnpm --filter @waifu-tutor/frontend lint",
+    "test": "pnpm --filter @waifu-tutor/frontend test"
+  }
+}
