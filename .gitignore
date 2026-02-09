@@ -16,3 +16,4 @@ backend/data/uploads/*
 !.env.example
 *.log
 .DS_Store
+frontend/tsconfig.tsbuildinfo

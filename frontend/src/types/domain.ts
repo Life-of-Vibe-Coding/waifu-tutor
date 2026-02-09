@@ -1,4 +1,5 @@
 export type CharacterMood = "happy" | "encouraging" | "sad" | "neutral" | "excited";
+export type CompanionStatus = "idle" | "listening" | "thinking" | "celebrating" | "comforting";
 
 export interface DocumentMeta {
   id: string;
