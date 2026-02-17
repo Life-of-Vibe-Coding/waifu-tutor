@@ -1,31 +1,36 @@
 # Waifu Tutor
 
-Full-stack phase-1 implementation based on `waifu_tutor_architecture.md`.
+Full-stack learning companion (Next.js + SQLite, no Qdrant).
 
 ## Stack
-- Frontend: React + Vite + TypeScript + Tailwind + React Query + Zustand
-- Backend: FastAPI + SQLAlchemy + SQLite + Qdrant + Gemini adapter
-- Runtime: Docker Compose (`infra/docker-compose.yml`)
+- **Next.js 14** (App Router) – frontend + API routes
+- **SQLite** (better-sqlite3) – relational data, FTS5 keyword search, in-DB vector storage for semantic search
+- **Gemini** (optional) – summarization, flashcards, chat, embeddings
 
 ## Quick start
 
 ```bash
 cp .env.example .env
-./scripts/dev.sh
+# Optional: set GEMINI_API_KEY in .env for AI features
+pnpm install
+pnpm dev
 ```
 
-Frontend: `http://localhost:5173`
-Backend: `http://localhost:8000`
-Qdrant: `http://localhost:6333`
+Open **http://localhost:3000**.
 
-## Demo mode
-- `DEMO_MODE=true` by default
-- Auth endpoints are preserved but return demo-user contracts
+## Project layout
+- `app/` – Next.js pages and API routes
+- `components/` – React UI (chat, Live2D stage, companion HUD)
+- `lib/` – DB, AI (Gemini), search (FTS + SQLite vectors), document parsing
+- `state/` – Zustand store
+- `types/` – shared TypeScript types
+- `public/` – static assets (e.g. Live2D demo under `public/live2d-demo/`)
 
-## Live2D setup
-- This app is wired to use the official Cubism Web sample build output.
-- Follow: https://docs.live2d.com/en/cubism-sdk-tutorials/sample-build-web/
-- Copy sample `dist` output into: `frontend/public/live2d-demo/`
-- See detailed steps: `docs/live2d_setup.md`
+## Data
+- SQLite file: `data/waifu_tutor.db` (created on first run)
+- Uploads: `data/uploads/`
+- No Qdrant or external vector DB; embeddings are stored in SQLite and similarity is computed in-process.
 
-See `docs/runbook.md` for more details.
+## Live2D
+- Copy Cubism Web sample build output into `public/live2d-demo/` (see `docs/live2d_setup.md` if present).
+- If the demo is missing, the app shows a fallback character.

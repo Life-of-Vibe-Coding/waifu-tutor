@@ -16,4 +16,10 @@ backend/data/uploads/*
 !.env.example
 *.log
 .DS_Store
+data/
+.next
+.cursor
+.agents
+Gmail-MCP
+tsconfig.tsbuildinfo
 frontend/tsconfig.tsbuildinfo
