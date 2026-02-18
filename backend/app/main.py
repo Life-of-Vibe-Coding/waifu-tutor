@@ -4,8 +4,11 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 from app.api import auth, chat, documents, health, not_implemented, sessions
+from app.core.errors import ChatErrorCode, detail
 from app.db.openviking_client import close_openviking_client
 from app.db.session import init_db
 
@@ -15,7 +18,26 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Initialize DB and resources on startup."""
     init_db()
     yield
+    from app.services.scheduler import shutdown_scheduler
+
+    shutdown_scheduler()
     close_openviking_client()
+
+
+def _validation_error_message(errors: list) -> str:
+    """Turn FastAPI/Pydantic validation errors into a single user-facing message."""
+    if not errors:
+        return "Invalid request."
+    first = errors[0]
+    msg = first.get("msg", "Invalid request.")
+    if isinstance(msg, str) and "ensure this value has at most" in msg:
+        return "Message is too long. Please shorten it."
+    if isinstance(msg, str) and "ensure this value has at least" in msg:
+        return "Please enter a message."
+    loc = first.get("loc", ())
+    if loc and loc[-1] == "message":
+        return msg if isinstance(msg, str) else "Invalid message."
+    return msg if isinstance(msg, str) else "Invalid request."
 
 
 def create_app() -> FastAPI:
@@ -25,6 +47,17 @@ def create_app() -> FastAPI:
         version="0.2.0",
         lifespan=lifespan,
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(_request, exc: RequestValidationError):
+        """Return structured { code, message } for 422 so the UI can show a single message."""
+        errors = list(exc.errors()) if hasattr(exc, "errors") else []
+        message = _validation_error_message(errors)
+        return JSONResponse(
+            status_code=400,
+            content={"detail": detail(ChatErrorCode.INVALID_REQUEST, message)},
+        )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

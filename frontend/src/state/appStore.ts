@@ -58,5 +58,5 @@ export const useAppStore = create<AppState>((set) => ({
   setListening: (value) => set({ isListening: value }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
   setMessages: (messages) => set({ messages }),
-  clearConversation: () => set({ messages: [], sessionId: null }),
+  clearConversation: () => set({ messages: [], sessionId: null, activeDocId: null }),
 }));

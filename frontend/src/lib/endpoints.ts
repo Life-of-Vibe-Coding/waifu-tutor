@@ -5,17 +5,58 @@ import type {
   DocumentMeta,
   Flashcard,
   NoteFolder,
-  Reminder,
   StudyNote,
   StudyProgress,
   Subject,
   SummaryResponse,
 } from "@/types/domain";
 
-export interface StreamEvent {
-  type: "token" | "context" | "mood" | "done" | "error";
-  payload: unknown;
+export interface ReminderPayload {
+  reminder_id: string;
+  due_at: string;
+  minutes: number;
+  kind?: "break" | "focus";
+  stream_id?: string;
 }
+
+export interface StreamContextPayload {
+  session_id?: string;
+  stream_id?: string;
+  [key: string]: unknown;
+}
+
+export interface StreamTokenPayload {
+  token?: string;
+  session_id?: string;
+  stream_id?: string;
+}
+
+export interface StreamMoodPayload {
+  mood?: string;
+  stream_id?: string;
+}
+
+export interface StreamDonePayload {
+  message?: string;
+  session_id?: string;
+  model_fallback?: boolean;
+  reminder?: ReminderPayload;
+  openviking_error?: string;
+  stream_id?: string;
+}
+
+export interface StreamErrorPayload {
+  message?: string;
+  stream_id?: string;
+}
+
+export type StreamEvent =
+  | { type: "token"; payload: StreamTokenPayload }
+  | { type: "context"; payload: StreamContextPayload }
+  | { type: "mood"; payload: StreamMoodPayload }
+  | { type: "done"; payload: StreamDonePayload }
+  | { type: "reminder"; payload: ReminderPayload }
+  | { type: "error"; payload: StreamErrorPayload };
 
 export const listDocuments = async (): Promise<DocumentMeta[]> => {
   const { data } = await apiClient.get<DocumentMeta[]>("/api/documents/list");
@@ -37,9 +78,13 @@ export const setDocumentSubject = async (docId: string, subjectId: string | null
   return data;
 };
 
-export const uploadDocument = async (file: File): Promise<DocumentMeta> => {
+export const uploadDocument = async (
+  file: File,
+  folderName?: string | null
+): Promise<DocumentMeta> => {
   const form = new FormData();
   form.append("file", file);
+  if (folderName) form.append("folder_name", folderName);
   const { data } = await apiClient.post<DocumentMeta>("/api/documents/upload", form, {
     headers: { "Content-Type": "multipart/form-data" },
   });
@@ -81,32 +126,6 @@ export const reviewFlashcard = async (cardId: string, quality: number, userAnswe
 export const getProgress = async (): Promise<StudyProgress> => {
   const { data } = await apiClient.get<StudyProgress>("/api/study/progress");
   return data;
-};
-
-export const listReminders = async (): Promise<Reminder[]> => {
-  const { data } = await apiClient.get<Reminder[]>("/api/reminders/list");
-  return data;
-};
-
-export const createReminder = async (title: string, note: string, scheduledFor: string): Promise<Reminder> => {
-  const { data } = await apiClient.post<Reminder>("/api/reminders/create", {
-    title,
-    note,
-    scheduled_for: scheduledFor,
-  });
-  return data;
-};
-
-export const updateReminder = async (
-  reminderId: string,
-  patch: Partial<Pick<Reminder, "title" | "note" | "completed">> & { scheduled_for?: string }
-): Promise<Reminder> => {
-  const { data } = await apiClient.put<Reminder>(`/api/reminders/${reminderId}`, patch);
-  return data;
-};
-
-export const deleteReminder = async (reminderId: string): Promise<void> => {
-  await apiClient.delete(`/api/reminders/${reminderId}`);
 };
 
 export const listNoteFolders = async (): Promise<NoteFolder[]> => {
@@ -215,6 +234,21 @@ export const sendGmailMail = async (params: {
   await apiClient.post("/api/gmail/mail/send", params);
 };
 
+/** Recognized once at app load; never sent as a body parameter, only via X-User-Timezone header. */
+const USER_TIMEZONE: string | null = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+})();
+
+function chatHeaders(): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (USER_TIMEZONE) h["X-User-Timezone"] = USER_TIMEZONE;
+  return h;
+}
+
 export const chat = async (
   message: string,
   history: ChatMessage[],
@@ -226,8 +260,44 @@ export const chat = async (
     history,
     doc_id: docId,
     session_id: sessionId,
+  }, { headers: chatHeaders() });
+  return data;
+};
+
+export interface InitialGreetingResponse {
+  message: string | null;
+  session_id: string | null;
+}
+
+export const getInitialGreeting = async (
+  sessionId?: string | null
+): Promise<InitialGreetingResponse> => {
+  const { data } = await apiClient.post<InitialGreetingResponse>("/api/ai/initial-greeting", {
+    session_id: sessionId ?? null,
   });
   return data;
+};
+
+export interface DueReminder {
+  id: string;
+  session_id: string;
+  user_id: string;
+  due_at: string;
+  message: string;
+  kind: string;
+  status: string;
+  created_at: string;
+}
+
+export const listDueReminders = async (sessionId: string): Promise<DueReminder[]> => {
+  const { data } = await apiClient.get<DueReminder[]>("/api/ai/reminders", {
+    params: { session_id: sessionId },
+  });
+  return Array.isArray(data) ? data : [];
+};
+
+export const ackReminder = async (reminderId: string): Promise<void> => {
+  await apiClient.patch(`/api/ai/reminders/${reminderId}/ack`);
 };
 
 const STREAM_TIMEOUT_MS = 120000;
@@ -247,11 +317,32 @@ export const streamChat = async (
     try {
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history, doc_id: docId, session_id: sessionId }),
+        headers: chatHeaders(),
+        body: JSON.stringify({
+          message,
+          history,
+          doc_id: docId,
+          session_id: sessionId,
+        }),
         signal: controller.signal,
       });
-      if (!response.ok || !response.body) throw new Error("Failed to open chat stream");
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({
+          detail: { code: "invalid_request", message: "Request failed" },
+        }))) as { detail?: { code?: string; message?: string } | Array<{ msg?: string }> };
+        const detailObj = data?.detail;
+        const message =
+          detailObj && typeof detailObj === "object" && !Array.isArray(detailObj) && typeof detailObj.message === "string"
+            ? detailObj.message
+            : Array.isArray(detailObj) && detailObj[0]?.msg
+              ? String(detailObj[0].msg)
+              : "Request failed";
+        const err = Object.assign(new Error(message), {
+          response: { status: response.status, data },
+        });
+        throw err;
+      }
+      if (!response.body) throw new Error("Failed to open chat stream");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -267,10 +358,9 @@ export const streamChat = async (
           if (line.startsWith("data: ")) {
             try {
               const parsed = JSON.parse(line.replace("data: ", "").trim()) as Record<string, unknown>;
-              onEvent({
-                type: currentEvent as StreamEvent["type"],
-                payload: "data" in parsed ? parsed.data : parsed,
-              });
+              const eventType = currentEvent as StreamEvent["type"];
+              const payload = ("data" in parsed ? parsed.data : parsed) as StreamEvent["payload"];
+              onEvent({ type: eventType, payload } as StreamEvent);
             } catch {
               onEvent({ type: "error", payload: { message: "Malformed stream event" } });
             }

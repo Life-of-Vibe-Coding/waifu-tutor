@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # Uploads
     upload_dir: Path = Path("../db/data/uploads")
-    max_upload_bytes: int = 10 * 1024 * 1024  # 10 MiB
+    max_upload_bytes: int = 50 * 1024 * 1024  # 50 MiB
 
     # AI: Volcengine ARK (e.g. doubao-seed-2-0-mini-260215)
     volcengine_api_key: str | None = None
@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     demo_user_id: str = "demo-user"
     demo_email: str = "demo@waifu.local"
     demo_display_name: str = "Demo Student"
+
+    # Logging: base directory (default: backend/logs). Subdirs: chat/, viking/. Set LOG_DIR in .env to override.
+    log_dir: Path = Path("logs")
 
     # OpenViking context DB (uses same data root as SQLite: db/data/openviking)
     openviking_data_dir: str | None = None  # None = auto: same base as DB

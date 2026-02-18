@@ -19,6 +19,7 @@ db/data/uploads/*
 .env.*
 !.env.example
 *.log
+backend/logs/
 .DS_Store
 .next
 .cursor

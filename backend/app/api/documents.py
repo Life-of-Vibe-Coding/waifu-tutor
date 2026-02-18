@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import get_settings
@@ -18,6 +18,7 @@ from app.db.repositories import (
     set_document_subject,
     update_document_status,
 )
+from app.core.viking_logging import log_viking_index_document
 from app.services.document_parser import chunk_text, parse_document
 from app.services.file_search import doc_uri
 
@@ -32,7 +33,7 @@ def _demo_user_id() -> str:
 
 def _index_document_in_openviking(doc_id: str, storage_path: Path, title: str) -> tuple[bool, str | None, str | None]:
     if not openviking_enabled():
-        return False, "openviking_disabled", None
+        return False, "OpenViking not configured", None
     try:
         user_id = _demo_user_id()
         target = doc_uri(user_id, doc_id)
@@ -44,8 +45,10 @@ def _index_document_in_openviking(doc_id: str, storage_path: Path, title: str) -
             instruction="Index this study material for OpenViking context file search.",
             wait=False,
         )
+        log_viking_index_document(doc_id, str(storage_path), True, openviking_uri=target)
         return True, None, target
     except Exception as e:
+        log_viking_index_document(doc_id, str(storage_path), False, error=str(e))
         return False, str(e), None
 
 
@@ -75,21 +78,29 @@ def patch_doc(doc_id: str, body: PatchDocBody) -> dict:
 
 
 @router.post("/upload")
-async def upload_doc(file: UploadFile = File(...)) -> dict:
+async def upload_doc(
+    file: UploadFile = File(...),
+    folder_name: str | None = Form(None),
+) -> dict:
     if not file.filename:
+        print("Upload failed: No filename")
         raise HTTPException(status_code=400, detail={"code": "invalid_document", "message": "No file"})
     content = await file.read()
     size = len(content)
-    if size > get_settings().max_upload_bytes:
+    max_bytes = get_settings().max_upload_bytes
+    if size > max_bytes:
+        print(f"Upload failed: Size {size} exceeds limit {max_bytes}")
         raise HTTPException(
             status_code=400,
-            detail={"code": "invalid_document", "message": f"File exceeds max upload size ({get_settings().max_upload_bytes} bytes)"},
+            detail={"code": "invalid_document", "message": f"File exceeds max upload size ({max_bytes} bytes)"},
         )
     if size == 0:
+        print("Upload failed: File is empty")
         raise HTTPException(status_code=400, detail={"code": "invalid_document", "message": "File is empty"})
     name = file.filename or "document.txt"
     ext = Path(name).suffix.lower()
     if ext not in ALLOWED_EXT:
+        print(f"Upload failed: Unsupported extension {ext}")
         raise HTTPException(status_code=400, detail={"code": "invalid_document", "message": "Unsupported file extension"})
 
     doc_id = str(uuid.uuid4())
@@ -110,6 +121,7 @@ async def upload_doc(file: UploadFile = File(...)) -> dict:
         size_bytes=size,
         storage_path=str(storage_path),
         status="processing",
+        source_folder=folder_name,
     )
 
     try:
@@ -136,6 +148,7 @@ async def upload_doc(file: UploadFile = File(...)) -> dict:
             "subject_id": None,
             "title": title,
             "filename": name,
+            "source_folder": folder_name,
             "mime_type": mime,
             "size_bytes": size,
             "status": "ready",

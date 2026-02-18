@@ -1,6 +1,9 @@
 """Repository helpers for documents, sessions, and chat context."""
 from __future__ import annotations
 
+import sqlite3
+import uuid
+
 from app.db.session import get_conn
 
 
@@ -9,7 +12,7 @@ def list_documents(user_id: str) -> list[dict]:
     try:
         cur = conn.execute(
             "SELECT id, user_id, subject_id, title, filename, mime_type, size_bytes, status, word_count,"
-            " topic_hint, difficulty_estimate, storage_path, openviking_uri, created_at, updated_at"
+            " topic_hint, difficulty_estimate, storage_path, openviking_uri, source_folder, created_at, updated_at"
             " FROM documents WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         )
@@ -23,7 +26,7 @@ def get_document(doc_id: str, user_id: str) -> dict | None:
     try:
         cur = conn.execute(
             "SELECT id, user_id, subject_id, title, filename, mime_type, size_bytes, status, word_count,"
-            " topic_hint, difficulty_estimate, storage_path, openviking_uri, created_at, updated_at"
+            " topic_hint, difficulty_estimate, storage_path, openviking_uri, source_folder, created_at, updated_at"
             " FROM documents WHERE id = ? AND user_id = ?",
             (doc_id, user_id),
         )
@@ -43,13 +46,14 @@ def insert_document(
     storage_path: str,
     status: str = "processing",
     subject_id: str | None = None,
+    source_folder: str | None = None,
 ) -> None:
     conn = get_conn()
     try:
         conn.execute(
-            """INSERT INTO documents (id, user_id, subject_id, title, filename, mime_type, size_bytes, status, storage_path)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (doc_id, user_id, subject_id, title, filename, mime_type, size_bytes, status, storage_path),
+            """INSERT INTO documents (id, user_id, subject_id, title, filename, mime_type, size_bytes, status, storage_path, source_folder)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (doc_id, user_id, subject_id, title, filename, mime_type, size_bytes, status, storage_path, source_folder),
         )
         conn.commit()
     finally:
@@ -89,7 +93,7 @@ def set_document_subject(doc_id: str, user_id: str, subject_id: str | None) -> d
         conn.commit()
         cur = conn.execute(
             "SELECT id, user_id, subject_id, title, filename, mime_type, size_bytes, status, word_count,"
-            " topic_hint, difficulty_estimate, storage_path, openviking_uri, created_at, updated_at"
+            " topic_hint, difficulty_estimate, storage_path, openviking_uri, source_folder, created_at, updated_at"
             " FROM documents WHERE id = ? AND user_id = ?",
             (doc_id, user_id),
         )
@@ -97,6 +101,44 @@ def set_document_subject(doc_id: str, user_id: str, subject_id: str | None) -> d
         return dict(row) if row else None
     finally:
         conn.close()
+
+
+def list_subjects(user_id: str) -> list[dict]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT id, name, created_at FROM subjects WHERE user_id = ? ORDER BY name",
+            (user_id,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def create_subject(user_id: str, name: str) -> dict:
+    conn = get_conn()
+    try:
+        subject_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO subjects (id, user_id, name) VALUES (?, ?, ?)",
+            (subject_id, user_id, name),
+        )
+        conn.commit()
+        return {"id": subject_id, "user_id": user_id, "name": name}
+    except sqlite3.IntegrityError:
+        # Subject likely exists
+        cur = conn.execute(
+            "SELECT id, name, created_at FROM subjects WHERE user_id = ? AND name = ?",
+            (user_id, name),
+        )
+        row = cur.fetchone()
+        if row:
+            return dict(row)
+        raise
+    finally:
+        conn.close()
+
+
 
 
 def delete_chunks_for_document(doc_id: str) -> None:
@@ -244,6 +286,72 @@ def mark_chat_session_committed(session_id: str, user_id: str) -> None:
             WHERE id = ? AND user_id = ?
             """,
             (session_id, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# Reminders (break, focus, or other scheduled reminders)
+
+def insert_reminder(
+    reminder_id: str,
+    session_id: str,
+    user_id: str,
+    due_at: str,
+    message: str,
+    kind: str = "break",
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO reminders (id, session_id, user_id, due_at, message, kind, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'scheduled')
+            """,
+            (reminder_id, session_id, user_id, due_at, message, kind),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_due_reminders(session_id: str, user_id: str) -> list[dict]:
+    """Return reminders for this session that are due and not yet acknowledged."""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, session_id, user_id, due_at, message, kind, status, created_at
+            FROM reminders
+            WHERE session_id = ? AND user_id = ? AND status = 'due'
+            ORDER BY due_at ASC
+            """,
+            (session_id, user_id),
+        )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def mark_reminder_acknowledged(reminder_id: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE reminders SET status = 'acknowledged' WHERE id = ?",
+            (reminder_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_reminder_due(reminder_id: str) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE reminders SET status = 'due' WHERE id = ?",
+            (reminder_id,),
         )
         conn.commit()
     finally:

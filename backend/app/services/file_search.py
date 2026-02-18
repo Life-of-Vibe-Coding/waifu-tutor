@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import fields, is_dataclass
 from typing import Any
 
+from app.core.viking_logging import log_viking_search
 from app.db.repositories import get_chunks_for_document
 
 
@@ -108,6 +109,7 @@ class ContextSearchService:
         if not self.client:
             self.last_error = "openviking_unavailable"
             self.last_trace = {"mode": "fallback", "reason": self.last_error}
+            log_viking_search(query, "unavailable", 0, error=self.last_error)
             return self._fallback_document_chunks(doc_id, limit)
 
         target_uri = doc_uri(user_id, doc_id) if doc_id else user_root_uri(user_id)
@@ -119,6 +121,7 @@ class ContextSearchService:
         except Exception as e:
             self.last_error = str(e)
             self.last_trace = {"mode": "fallback", "target_uri": target_uri, "reason": self.last_error}
+            log_viking_search(query, target_uri, 0, error=self.last_error)
             return self._fallback_document_chunks(doc_id, limit)
 
         result_dict = _to_plain(result)
@@ -161,6 +164,7 @@ class ContextSearchService:
             "query_results": query_results if include_trace else None,
         }
 
+        log_viking_search(query, target_uri, len(out))
         if out:
             return out[:limit]
         return self._fallback_document_chunks(doc_id, limit)

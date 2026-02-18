@@ -1,10 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { getChatErrorMessage } from "./chat-error";
+import { getChatErrorMessage, getChatErrorKind } from "./chat-error";
 
 describe("getChatErrorMessage", () => {
   it("returns backend detail.message when present", () => {
     const err = { response: { data: { detail: { message: "Message required" } } } };
     expect(getChatErrorMessage(null, err)).toBe("Message required");
+  });
+
+  it("returns backend detail.message when detail has code and message", () => {
+    const err = { response: { data: { detail: { code: "message_required", message: "Please enter a message." } } } };
+    expect(getChatErrorMessage(null, err)).toBe("Please enter a message.");
   });
 
   it("returns backend data.message when present", () => {
@@ -54,5 +59,23 @@ describe("getChatErrorMessage", () => {
     expect(getChatErrorMessage(new Error("Unknown"), null)).toBe(
       "Failed to get response from assistant."
     );
+  });
+});
+
+describe("getChatErrorKind", () => {
+  it("returns validation for message_required", () => {
+    const err = { response: { status: 400, data: { detail: { code: "message_required", message: "Please enter a message." } } } };
+    expect(getChatErrorKind(null, err)).toBe("validation");
+  });
+
+  it("returns validation for message_too_long and invalid_request", () => {
+    expect(getChatErrorKind(null, { response: { status: 400, data: { detail: { code: "message_too_long" } } } })).toBe("validation");
+    expect(getChatErrorKind(null, { response: { status: 400, data: { detail: { code: "invalid_request" } } } })).toBe("validation");
+  });
+
+  it("returns server for 502/500 and network errors", () => {
+    expect(getChatErrorKind(null, { response: { status: 502 } })).toBe("server");
+    expect(getChatErrorKind(null, { response: { status: 500 } })).toBe("server");
+    expect(getChatErrorKind(new Error("Failed to fetch"), null)).toBe("server");
   });
 });

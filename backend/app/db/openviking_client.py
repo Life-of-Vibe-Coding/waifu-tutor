@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.viking_logging import log_viking_client_close, log_viking_client_init
 
 _client = None
 _client_lock = Lock()
@@ -73,9 +74,14 @@ def get_openviking_client():
 
         path = get_openviking_path()
         path.mkdir(parents=True, exist_ok=True)
-        config = _build_openviking_config(path)
-        _client = ov.SyncOpenViking(path=str(path), config=config)
-        return _client
+        try:
+            config = _build_openviking_config(path)
+            _client = ov.SyncOpenViking(path=str(path), config=config)
+            log_viking_client_init(success=True)
+            return _client
+        except Exception as e:
+            log_viking_client_init(success=False, error=str(e))
+            raise
 
 
 def close_openviking_client() -> None:
@@ -86,6 +92,7 @@ def close_openviking_client() -> None:
             return
         try:
             _client.close()
+            log_viking_client_close()
         finally:
             _client = None
 

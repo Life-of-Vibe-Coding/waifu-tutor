@@ -1,4 +1,4 @@
-"""AI chat via Volcengine ARK (Doubao-Seed-1.8), with fallback."""
+"""AI chat via Volcengine ARK (Doubao-Seed-1.8), with fallback and tool calling."""
 from __future__ import annotations
 
 import logging
@@ -10,10 +10,9 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PERSONA = "You are Waifu Tutor, a warm and supportive study companion. Be concise, accurate, and encouraging."
 
-
-def _volcengine_complete(messages: list[dict[str, str]]) -> str | None:
+def _volcengine_complete(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    """Call Volcengine chat/completions. Returns dict with 'content' (str or None) and 'tool_calls' (list or None)."""
     settings = get_settings()
     if not settings.volcengine_api_key:
         logger.warning("Chat fallback: VOLCENGINE_API_KEY not set in backend .env")
@@ -21,6 +20,8 @@ def _volcengine_complete(messages: list[dict[str, str]]) -> str | None:
     base = settings.volcengine_chat_base.rstrip("/")
     url = f"{base}/chat/completions"
     payload: dict[str, Any] = {"model": settings.chat_model, "messages": messages}
+    if tools:
+        payload["tools"] = tools
     try:
         with httpx.Client(timeout=45.0) as client:
             r = client.post(
@@ -40,8 +41,23 @@ def _volcengine_complete(messages: list[dict[str, str]]) -> str | None:
                 )
                 return None
             data = r.json()
-            content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-            return (content or "").strip() or None
+            msg = (data.get("choices") or [{}])[0].get("message", {})
+            content = (msg.get("content") or "").strip() or None
+            raw_tool_calls = msg.get("tool_calls")
+            tool_calls = None
+            if raw_tool_calls:
+                tool_calls = [
+                    {
+                        "id": tc.get("id", ""),
+                        "type": tc.get("type", "function"),
+                        "function": {
+                            "name": (tc.get("function") or {}).get("name", ""),
+                            "arguments": (tc.get("function") or {}).get("arguments", "{}"),
+                        },
+                    }
+                    for tc in raw_tool_calls
+                ]
+            return {"content": content, "tool_calls": tool_calls}
     except Exception as e:
         logger.warning("Chat fallback: Volcengine request failed: %s", e, exc_info=True)
         return None
@@ -63,7 +79,6 @@ def chat(
     context_texts: list[str],
     attachment_doc_title: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
-    system_persona: str | None = None,
 ) -> tuple[str, bool]:
     """Returns (reply_text, used_fallback). used_fallback is True when Volcengine was not used."""
     context_block = "\n\n".join(context_texts[:14])
@@ -78,25 +93,28 @@ def chat(
         if lines:
             history_block = "Recent conversation history:\n" + "\n".join(lines) + "\n\n"
 
-    attachment_hint = ""
     context_label = "Context (from user's documents):"
-    if attachment_doc_title and context_texts:
-        attachment_hint = (
-            f'The user selected "{attachment_doc_title}" as context. '
-            "The excerpts below are from this material. Use them precisely.\n\n"
-        )
-        context_label = "Content from selected document:"
-
     user_content = (
-        f"{history_block}{attachment_hint}{context_label}\n{context_block}\n\n"
+        f"{history_block}{context_label}\n{context_block}\n\n"
         f"User question:\n{prompt}\n\n"
         "Reply in character: accurate, helpful, concise, and encouraging."
     )
-    persona = (system_persona or DEFAULT_PERSONA).strip() or DEFAULT_PERSONA
-    out = _volcengine_complete([{"role": "system", "content": persona}, {"role": "user", "content": user_content}])
-    if out:
-        return out, False
+    messages = [{"role": "user", "content": user_content}]
+    out = _volcengine_complete(messages)
+    if out and out.get("content"):
+        return out["content"], False
     return fallback_chat(prompt, context_texts), True
+
+
+def complete_with_tools(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]] | None]:
+    """Call Volcengine with tools. Returns (content, tool_calls). Either content or tool_calls may be set."""
+    out = _volcengine_complete(messages, tools=tools)
+    if not out:
+        return None, None
+    return out.get("content"), out.get("tool_calls")
 
 
 def mood_from_text(text: str) -> str:

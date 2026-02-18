@@ -17,6 +17,7 @@ export interface DocumentMeta {
   openviking_uri?: string | null;
   openviking_indexed?: boolean;
   openviking_error?: string | null;
+  source_folder?: string | null;
   suggested_subject_id?: string | null;
   suggested_subject_name?: string | null;
   subject_needs_confirmation?: boolean;
@@ -51,17 +52,6 @@ export interface Flashcard {
   next_review_at?: string | null;
 }
 
-export interface Reminder {
-  id: string;
-  title: string;
-  note?: string | null;
-  scheduled_for: string;
-  completed: boolean;
-  created_at: string;
-  updated_at: string;
-  due_now: boolean;
-}
-
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -76,6 +66,13 @@ export interface ChatContextChunk {
   uri?: string;
 }
 
+export interface ReminderPayload {
+  reminder_id: string;
+  due_at: string;
+  minutes: number;
+  kind?: "break" | "focus";
+}
+
 export interface ChatResponse {
   message: ChatMessage & { created_at?: string };
   context: ChatContextChunk[];
@@ -83,6 +80,7 @@ export interface ChatResponse {
   session_id?: string;
   openviking_error?: string;
   rag_trace?: unknown;
+  reminder?: ReminderPayload;
 }
 
 export interface StudyProgress {

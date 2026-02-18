@@ -11,7 +11,6 @@ from app.db.repositories import (
     list_chat_sessions,
     mark_chat_session_committed,
 )
-from app.services.memory import MemoryManager
 
 router = APIRouter()
 
@@ -25,6 +24,24 @@ def _safe_limit(value: int, default: int) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _to_plain(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        try:
+            dumped = value.model_dump()
+            if isinstance(dumped, dict):
+                return dumped
+        except Exception:
+            pass
+    if hasattr(value, "__dict__"):
+        try:
+            return {k: v for k, v in vars(value).items() if not str(k).startswith("_")}
+        except Exception:
+            pass
+    return {}
 
 
 @router.get("")
@@ -48,14 +65,14 @@ def commit_session(session_id: str) -> dict:
     if not session:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Session not found"})
 
-    commit_result: dict = {"status": "skipped", "reason": "openviking_not_configured"}
-    if openviking_enabled():
-        try:
-            memory = MemoryManager(get_openviking_client())
-            ov_session = memory.get_or_create_session(session_id)
-            commit_result = memory.commit_session(ov_session)
-        except Exception as e:
-            commit_result = {"status": "failed", "message": str(e)}
+    try:
+        if openviking_enabled():
+            ov_session = get_openviking_client().session(session_id=session_id)
+            commit_result = _to_plain(ov_session.commit()) or {"status": "ok"}
+        else:
+            commit_result = {"status": "ok", "message": "OpenViking not configured"}
+    except Exception as e:
+        commit_result = {"status": "failed", "message": str(e)}
 
     mark_chat_session_committed(session_id, _demo_user_id())
     return {"session_id": session_id, "commit": commit_result}
