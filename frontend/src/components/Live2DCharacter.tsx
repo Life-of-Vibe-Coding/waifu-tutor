@@ -15,6 +15,13 @@ type Live2DBridgeMessage = {
   timestamp: string;
 };
 
+type Live2DStatusMessage = {
+  source: "waifu-tutor";
+  type: "WAIFU_TUTOR_STATUS";
+  status: CompanionStatus;
+  timestamp: string;
+};
+
 
 
 const moodShadow: Record<CharacterMood, string> = {
@@ -62,6 +69,17 @@ export const Live2DCharacter = ({ mood, status = "idle" }: Props) => {
     iframeRef.current.contentWindow.postMessage(payload, window.location.origin);
   }, [mood, sampleAvailable]);
 
+  useEffect(() => {
+    if (!sampleAvailable || !iframeRef.current?.contentWindow) return;
+    const payload: Live2DStatusMessage = {
+      source: "waifu-tutor",
+      type: "WAIFU_TUTOR_STATUS",
+      status,
+      timestamp: new Date().toISOString(),
+    };
+    iframeRef.current.contentWindow.postMessage(payload, window.location.origin);
+  }, [status, sampleAvailable]);
+
   if (sampleAvailable) {
     return (
       <motion.div
@@ -79,13 +97,15 @@ export const Live2DCharacter = ({ mood, status = "idle" }: Props) => {
           allowTransparency={true}
           onLoad={() => {
             if (!iframeRef.current?.contentWindow) return;
-            const payload: Live2DBridgeMessage = {
-              source: "waifu-tutor",
-              type: "WAIFU_TUTOR_MOOD",
-              mood,
-              timestamp: new Date().toISOString(),
-            };
-            iframeRef.current.contentWindow.postMessage(payload, window.location.origin);
+            const win = iframeRef.current.contentWindow;
+            win.postMessage(
+              { source: "waifu-tutor", type: "WAIFU_TUTOR_MOOD", mood, timestamp: new Date().toISOString() } satisfies Live2DBridgeMessage,
+              window.location.origin
+            );
+            win.postMessage(
+              { source: "waifu-tutor", type: "WAIFU_TUTOR_STATUS", status, timestamp: new Date().toISOString() } satisfies Live2DStatusMessage,
+              window.location.origin
+            );
           }}
         />
         <CompanionHud className="absolute left-4 top-4 z-10" />

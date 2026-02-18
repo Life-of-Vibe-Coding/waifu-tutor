@@ -230,6 +230,8 @@ export const chat = async (
   return data;
 };
 
+const STREAM_TIMEOUT_MS = 120000;
+
 export const streamChat = async (
   message: string,
   history: ChatMessage[],
@@ -240,11 +242,14 @@ export const streamChat = async (
   const base = apiClient.defaults.baseURL || "";
   const url = base ? `${base}/api/ai/chat/stream` : "/api/ai/chat/stream";
   for (let attempt = 0; attempt <= 3; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
     try {
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, history, doc_id: docId, session_id: sessionId }),
+        signal: controller.signal,
       });
       if (!response.ok || !response.body) throw new Error("Failed to open chat stream");
       const reader = response.body.getReader();
@@ -272,8 +277,10 @@ export const streamChat = async (
           }
         }
       }
+      window.clearTimeout(timeoutId);
       return;
     } catch (err) {
+      window.clearTimeout(timeoutId);
       if (attempt >= 3) throw err;
       await new Promise((r) => setTimeout(r, 300 * 2 ** attempt));
     }

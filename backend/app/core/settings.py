@@ -18,10 +18,10 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("../db/data/uploads")
     max_upload_bytes: int = 10 * 1024 * 1024  # 10 MiB
 
-    # AI: Volcengine ARK (e.g. Doubao-Seed-1.8)
+    # AI: Volcengine ARK (e.g. doubao-seed-2-0-mini-260215)
     volcengine_api_key: str | None = None
     volcengine_chat_base: str = "https://ark.cn-beijing.volces.com/api/v3"
-    chat_model: str = "Doubao-Seed-1.8"
+    chat_model: str = "doubao-seed-2-0-mini-260215"
 
     # Demo user
     demo_user_id: str = "demo-user"

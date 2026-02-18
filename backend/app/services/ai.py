@@ -1,11 +1,14 @@
 """AI chat via Volcengine ARK (Doubao-Seed-1.8), with fallback."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PERSONA = "You are Waifu Tutor, a warm and supportive study companion. Be concise, accurate, and encouraging."
 
@@ -13,23 +16,34 @@ DEFAULT_PERSONA = "You are Waifu Tutor, a warm and supportive study companion. B
 def _volcengine_complete(messages: list[dict[str, str]]) -> str | None:
     settings = get_settings()
     if not settings.volcengine_api_key:
+        logger.warning("Chat fallback: VOLCENGINE_API_KEY not set in backend .env")
         return None
     base = settings.volcengine_chat_base.rstrip("/")
     url = f"{base}/chat/completions"
     payload: dict[str, Any] = {"model": settings.chat_model, "messages": messages}
     try:
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=45.0) as client:
             r = client.post(
                 url,
                 headers={"Authorization": f"Bearer {settings.volcengine_api_key}", "Content-Type": "application/json"},
                 json=payload,
             )
             if r.status_code != 200:
+                try:
+                    body = r.text[:500] if r.text else ""
+                except Exception:
+                    body = ""
+                logger.warning(
+                    "Chat fallback: Volcengine API returned status %s, body=%s",
+                    r.status_code,
+                    body,
+                )
                 return None
             data = r.json()
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
             return (content or "").strip() or None
-    except Exception:
+    except Exception as e:
+        logger.warning("Chat fallback: Volcengine request failed: %s", e, exc_info=True)
         return None
 
 
@@ -50,7 +64,8 @@ def chat(
     attachment_doc_title: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
     system_persona: str | None = None,
-) -> str:
+) -> tuple[str, bool]:
+    """Returns (reply_text, used_fallback). used_fallback is True when Volcengine was not used."""
     context_block = "\n\n".join(context_texts[:14])
     history_block = ""
     if conversation_history:
@@ -80,8 +95,8 @@ def chat(
     persona = (system_persona or DEFAULT_PERSONA).strip() or DEFAULT_PERSONA
     out = _volcengine_complete([{"role": "system", "content": persona}, {"role": "user", "content": user_content}])
     if out:
-        return out
-    return fallback_chat(prompt, context_texts)
+        return out, False
+    return fallback_chat(prompt, context_texts), True
 
 
 def mood_from_text(text: str) -> str:
