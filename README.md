@@ -1,36 +1,74 @@
 # Waifu Tutor
 
-Full-stack learning companion (Next.js + SQLite, no Qdrant).
+Full-stack learning companion: **React (Vite)** frontend + **Python 3.12 (FastAPI)** backend, SQLite.
 
 ## Stack
-- **Next.js 14** (App Router) – frontend + API routes
-- **SQLite** (better-sqlite3) – relational data, FTS5 keyword search, in-DB vector storage for semantic search
-- **Gemini** (optional) – summarization, flashcards, chat, embeddings
+
+### Frontend
+| | |
+|---|---|
+| Framework | React 18 + Vite 5 |
+| Routing | React Router 6 |
+| State | Zustand 5 |
+| Data Fetching | TanStack React Query 5 |
+| HTTP | Axios |
+| Styling | Tailwind CSS 3 + Framer Motion |
+| Language | TypeScript 5 |
+| Testing | Vitest |
+
+### Backend
+| | |
+|---|---|
+| Runtime | Python 3.12 |
+| Framework | FastAPI + Uvicorn |
+| Database | SQLite (FTS5, async via aiosqlite) |
+| Document Parsing | pypdf, python-docx |
+| Package Manager | uv |
+
+### AI
+| | |
+|---|---|
+| Chat | Gemini or Qwen (DashScope) / Doubao-Seed (VolcEngine) |
+| Config | `backend/.env` (see `backend/.env.example`) |
 
 ## Quick start
 
 ```bash
-cp .env.example .env
-# Optional: set GEMINI_API_KEY in .env for AI features
-pnpm install
-pnpm dev
+# 1. Backend env
+cp backend/.env.example backend/.env
+# Optional: set VOLCENGINE_API_KEY in backend/.env for chat (Doubao-Seed-1.8)
+
+# 2. Run both backend and frontend (from frontend/)
+cd frontend && npm install && npm run dev:all
 ```
 
-Open **http://localhost:3000**.
+Or run separately: `cd frontend && npm run dev` (frontend only) or `cd backend && uv sync && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000` (backend only).
+
+- **Frontend**: http://localhost:5173 (Vite dev server; proxies /api and /health to backend)
+- **Backend**: defaults to http://localhost:8000 (FastAPI)
+
+`npm run dev:all` now auto-handles port conflicts:
+- Reuses existing Waifu backend on `8000` if available
+- If `8000` is occupied by another service, starts backend on another free port and injects `VITE_API_BASE_URL` automatically for frontend chat/API calls
+
+Set `VITE_API_BASE_URL=http://localhost:8000` in `frontend/.env` if not using the Vite proxy (e.g. production build).
 
 ## Project layout
-- `app/` – Next.js pages and API routes
-- `components/` – React UI (chat, Live2D stage, companion HUD)
-- `lib/` – DB, AI (Gemini), search (FTS + SQLite vectors), document parsing
-- `state/` – Zustand store
-- `types/` – shared TypeScript types
-- `public/` – static assets (e.g. Live2D demo under `public/live2d-demo/`)
+- `frontend/` – Vite + React app (chat, notes UI, companion HUD)
+- `backend/` – FastAPI app (auth, documents, chat), scripts, infra, docs
+- `db/` – database data, schema, shared types
 
 ## Data
-- SQLite file: `data/waifu_tutor.db` (created on first run)
-- Uploads: `data/uploads/`
-- No Qdrant or external vector DB; embeddings are stored in SQLite and similarity is computed in-process.
+- SQLite: `db/data/waifu_tutor.db`
+- Uploads: `db/data/uploads/`
+
+## Environment
+- Backend: `backend/.env` (copy from `backend/.env.example`)
+- Frontend: `frontend/.env` – optional `VITE_API_BASE_URL` for API base URL
 
 ## Live2D
-- Copy Cubism Web sample build output into `public/live2d-demo/` (see `docs/live2d_setup.md` if present).
-- If the demo is missing, the app shows a fallback character.
+- Copy Cubism Web sample build into `frontend/public/live2d-demo/`. If missing, the app shows a fallback character.
+
+## Scripts & infra
+- `backend/scripts/` – bootstrap, dev, smoke tests
+- `backend/infra/` – docker-compose

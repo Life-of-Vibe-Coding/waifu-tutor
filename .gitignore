@@ -8,18 +8,29 @@ __pycache__
 .venv
 backend/.venv
 backend/.pytest_cache
+backend/.openviking
 backend/data/*.db
 backend/data/uploads/*
 !backend/data/uploads/.gitkeep
+db/data/*.db
+db/data/uploads/*
+!db/data/uploads/.gitkeep
 .env
 .env.*
 !.env.example
 *.log
 .DS_Store
-data/
 .next
 .cursor
 .agents
-Gmail-MCP
-tsconfig.tsbuildinfo
-frontend/tsconfig.tsbuildinfo
+backend/Gmail-MCP
+*.tsbuildinfo
+
+# Live2D assets (copy Cubism Web SDK sample to frontend/public/live2d-demo/ manually)
+frontend/public/live2d-demo/
+frontend/public/vendor/
+frontend/public/models/
+
+# OAuth tokens and runtime data
+db/data/gmail_refresh_token.txt
+db/data/openviking/

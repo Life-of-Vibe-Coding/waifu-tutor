@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { CharacterMood, CompanionStatus } from "@/types/domain";
 import { CompanionHud } from "./cute/CompanionHud";
 
@@ -15,13 +15,15 @@ type Live2DBridgeMessage = {
   timestamp: string;
 };
 
-const moodColor: Record<CharacterMood, string> = {
-  neutral: "from-white/50 via-slate-100/45 to-sky-100/45",
-  happy: "from-rose-100/55 via-pink-100/50 to-fuchsia-100/45",
-  encouraging: "from-amber-100/55 via-orange-100/50 to-yellow-100/45",
-  sad: "from-blue-100/55 via-cyan-100/50 to-sky-100/45",
-  excited: "from-fuchsia-100/55 via-rose-100/50 to-orange-100/45",
-  gentle: "from-lilac/55 via-pink-100/50 to-sky-100/45",
+
+
+const moodShadow: Record<CharacterMood, string> = {
+  neutral: "bg-sky-100/45",
+  happy: "bg-pink-100/45",
+  encouraging: "bg-amber-100/45",
+  sad: "bg-blue-100/45",
+  excited: "bg-fuchsia-100/45",
+  gentle: "bg-purple-100/45",
 };
 
 export const Live2DCharacter = ({ mood, status = "idle" }: Props) => {
@@ -38,10 +40,29 @@ export const Live2DCharacter = ({ mood, status = "idle" }: Props) => {
           return;
         }
         const html = await response.text();
-        const looksLikeAppShell = html.includes("<title>Waifu Tutor</title>");
-        setSampleAvailable(!looksLikeAppShell);
+        // Check for specific markers of the demo page to ensure we didn't get the app shell (SPA fallback)
+        const isDemoPage = html.includes('id="app"') && html.includes('live2d-app.js');
+        setSampleAvailable(isDemoPage);
+        // #region agent log
+        if (typeof fetch === "function") {
+          fetch("http://127.0.0.1:7247/ingest/e74e64de-c421-49b4-a147-afaab464f989", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0d5b46" },
+            body: JSON.stringify({
+              sessionId: "0d5b46",
+              runId: "layout",
+              hypothesisId: "H3",
+              location: "Live2DCharacter.tsx:sampleCheck",
+              message: "Live2D demo page check",
+              data: { sampleAvailable: isDemoPage, responseOk: response.ok },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+        }
+        // #endregion
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error("Failed to check Live2D demo page:", err);
         if (mounted) setSampleAvailable(false);
       });
     return () => { mounted = false; };
@@ -65,12 +86,14 @@ export const Live2DCharacter = ({ mood, status = "idle" }: Props) => {
         animate={{ rotateZ: [0, 0.35, 0, -0.3, 0] }}
         transition={{ duration: 7.8, repeat: Infinity, ease: "easeInOut" }}
       >
-        <div className="pointer-events-none absolute inset-x-0 bottom-[2%] mx-auto h-[16%] w-[52%] rounded-[999px] bg-sky-100/45 blur-xl" />
+        <div className={`pointer-events-none absolute inset-x-0 bottom-[2%] mx-auto h-[16%] w-[52%] rounded-[999px] blur-xl transition-colors duration-1000 ${moodShadow[mood]}`} />
         <iframe
           ref={iframeRef}
           title="Live2D character"
           src="/live2d-demo/index.html"
           className="h-full w-full border-0 bg-transparent"
+          style={{ backgroundColor: "transparent" }}
+          allowTransparency={true}
           onLoad={() => {
             if (!iframeRef.current?.contentWindow) return;
             const payload: Live2DBridgeMessage = {
@@ -85,7 +108,7 @@ export const Live2DCharacter = ({ mood, status = "idle" }: Props) => {
         <CompanionHud className="absolute left-4 top-4 z-10" />
         {status === "celebrating" && (
           <motion.div
-            className="pointer-events-none absolute inset-0 rounded-full border border-bubblegum/55"
+            className="pointer-events-none absolute inset-0 rounded-full border border-bubblegum/30"
             initial={{ opacity: 0.7, scale: 0.88 }}
             animate={{ opacity: 0, scale: 1.16 }}
             transition={{ duration: 0.65, ease: "easeOut" }}
@@ -97,7 +120,7 @@ export const Live2DCharacter = ({ mood, status = "idle" }: Props) => {
 
   return (
     <motion.div
-      className={`relative h-full w-full overflow-hidden bg-gradient-to-br ${moodColor[mood]}`}
+      className="relative h-full w-full overflow-hidden"
       animate={{ y: [0, -9, 0], rotate: [0, 0.8, 0, -0.6, 0] }}
       transition={{ duration: 6.2, repeat: Infinity, ease: "easeInOut" }}
     >
@@ -108,9 +131,9 @@ export const Live2DCharacter = ({ mood, status = "idle" }: Props) => {
       />
       <div className="absolute bottom-[22%] left-1/2 h-[58%] w-[40%] -translate-x-1/2 rounded-[44%_44%_40%_40%] border border-white/55 bg-white/35 shadow-[0_20px_40px_rgba(76,90,138,0.18)]" />
       <div className="absolute left-1/2 top-[24%] h-[15%] w-[19%] -translate-x-1/2 rounded-full border border-white/60 bg-white/45" />
-      
+
       <CompanionHud className="absolute left-4 top-4 z-10" />
-      
+
       <div className="absolute right-4 top-4 rounded-full border border-white/65 bg-white/35 px-3 py-1.5 text-xs font-semibold tracking-wide text-calm">
         Live2D files missing
       </div>

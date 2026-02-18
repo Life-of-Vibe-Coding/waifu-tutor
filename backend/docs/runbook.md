@@ -2,11 +2,11 @@
 
 ## Local Development (recommended)
 
-1. Copy environment: `cp .env.example .env` (and optionally `cp .env backend/.env`).
-2. From repo root: `npm install` then `npm run dev` (starts backend on port 8000 and frontend on port 5173).
-3. Open frontend at **http://localhost:5173**.
+1. Copy backend env: `cp backend/.env.example backend/.env`
+2. From frontend: `cd frontend && npm install && npm run dev:all` (starts backend on 8000 and frontend on 5173)
+3. Open **http://localhost:5173**
 
-## Local Development (without root script)
+## Local Development (separate terminals)
 
 ### Backend
 ```bash
@@ -25,12 +25,19 @@ Open **http://localhost:5173**. The Vite dev server proxies `/api` and `/health`
 
 ## Environment Variables
 - `DATABASE_URL`: defaults to `sqlite:///../db/data/waifu_tutor.db` (relative to backend cwd).
+- `OPENVIKING_DATA_DIR`: optional; OpenViking context DB path. Defaults to same data root as SQLite: `db/data/openviking`.
 - `UPLOAD_DIR`, `MAX_UPLOAD_BYTES`: upload path and size limit.
 - `VOLCENGINE_API_KEY`, `CHAT_MODEL`: Volcengine ARK (e.g. Doubao-Seed-1.8) for chat.
 
+## OpenViking (context DB)
+- Backend uses **uv** for deps; OpenViking is installed via `uv sync` (see `backend/pyproject.toml`).
+- Data is stored under the same directory as the existing DB: `db/data/openviking` (override with `OPENVIKING_DATA_DIR`).
+- To use the OpenViking client (e.g. for agent context / semantic retrieval), set `OPENVIKING_CONFIG_FILE` to your `ov.conf` (embedding + VLM). See [OpenViking docs](https://github.com/volcengine/openviking).
+- Helpers: `app.db.openviking_client.get_openviking_path()`, `get_openviking_client()`.
+
 ## Live2D Character Runtime
 - Build Cubism Web sample and copy output into `frontend/public/live2d-demo/`.
-- See `docs/live2d_setup.md` if present.
+- See `backend/docs/live2d_setup.md` if present.
 
 ## Troubleshooting
 - If upload fails for PDF/DOCX, ensure backend has `pypdf` and `python-docx` (in `backend/pyproject.toml`).
