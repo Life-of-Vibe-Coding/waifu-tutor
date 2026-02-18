@@ -30,26 +30,6 @@ export const TutorPane = () => {
   const companionStatus = useAppStore((s) => s.companionStatus);
   const ringConfig = statusRing[companionStatus];
 
-  // #region agent log
-  useEffect(() => {
-    if (typeof fetch === "function") {
-      fetch("http://127.0.0.1:7247/ingest/e74e64de-c421-49b4-a147-afaab464f989", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0d5b46" },
-        body: JSON.stringify({
-          sessionId: "0d5b46",
-          runId: "layout",
-          hypothesisId: "H3",
-          location: "TutorPane.tsx:mount",
-          message: "TutorPane mounted (contains Live2D)",
-          data: {},
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-    }
-  }, []);
-  // #endregion
-
   /* Wandering Logic */
   const [wanderPos, setWanderPos] = useState({ x: 0, y: 0 });
 
@@ -78,7 +58,7 @@ export const TutorPane = () => {
 
 
   return (
-    <div className="relative flex h-full w-full flex-col items-center justify-end overflow-hidden">
+    <div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden">
       {/* Ambient Background Glow */}
       <motion.div
         className={`absolute bottom-0 left-1/2 h-[70%] w-full -translate-x-1/2 bg-gradient-to-t via-white/5 to-transparent blur-3xl transition-colors duration-1000 ${moodGlow[mood]}`}

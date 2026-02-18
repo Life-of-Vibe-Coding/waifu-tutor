@@ -43,23 +43,6 @@ export const Live2DCharacter = ({ mood, status = "idle" }: Props) => {
         // Check for specific markers of the demo page to ensure we didn't get the app shell (SPA fallback)
         const isDemoPage = html.includes('id="app"') && html.includes('live2d-app.js');
         setSampleAvailable(isDemoPage);
-        // #region agent log
-        if (typeof fetch === "function") {
-          fetch("http://127.0.0.1:7247/ingest/e74e64de-c421-49b4-a147-afaab464f989", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0d5b46" },
-            body: JSON.stringify({
-              sessionId: "0d5b46",
-              runId: "layout",
-              hypothesisId: "H3",
-              location: "Live2DCharacter.tsx:sampleCheck",
-              message: "Live2D demo page check",
-              data: { sampleAvailable: isDemoPage, responseOk: response.ok },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-        }
-        // #endregion
       })
       .catch((err) => {
         console.error("Failed to check Live2D demo page:", err);

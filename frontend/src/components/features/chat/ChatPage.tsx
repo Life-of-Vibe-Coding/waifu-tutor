@@ -61,26 +61,6 @@ export const ChatPage = () => {
   const sparkleIdRef = useRef(0);
   const sparkleTimersRef = useRef<Array<number | ReturnType<typeof setTimeout>>>([]);
 
-  // #region agent log
-  useEffect(() => {
-    if (typeof fetch === "function") {
-      fetch("http://127.0.0.1:7247/ingest/e74e64de-c421-49b4-a147-afaab464f989", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0d5b46" },
-        body: JSON.stringify({
-          sessionId: "0d5b46",
-          runId: "layout",
-          hypothesisId: "H2",
-          location: "ChatPage.tsx:mount",
-          message: "ChatPage mounted (tutor pane); has no Live2D",
-          data: { hasLive2D: false },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-    }
-  }, []);
-  // #endregion
-
   const triggerCelebration = () => {
     if (celebrationTimeoutRef.current) window.clearTimeout(celebrationTimeoutRef.current);
     setCompanionStatus("celebrating");

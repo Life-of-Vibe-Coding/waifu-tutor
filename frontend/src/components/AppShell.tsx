@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChatPage } from "./features/chat/ChatPage";
 import { GmailConnect } from "./GmailConnect";
@@ -8,56 +8,31 @@ import { TutorPane } from "./TutorPane";
 export const AppShell = () => {
   const [showGmail, setShowGmail] = useState(false);
 
-  // #region agent log
-  useEffect(() => {
-    if (typeof fetch === "function") {
-      fetch("http://127.0.0.1:7247/ingest/e74e64de-c421-49b4-a147-afaab464f989", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0d5b46" },
-        body: JSON.stringify({
-          sessionId: "0d5b46",
-          runId: "layout",
-          hypothesisId: "H1",
-          location: "AppShell.tsx:mount",
-          message: "Layout: left aside=TutorPane, right main=ChatPage",
-          data: { hasLeftAside: true, hasRightMain: true, innerWidth: typeof window !== "undefined" ? window.innerWidth : null },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-    }
-  }, []);
-  // #endregion
-
   return (
     <div className="relative isolate h-screen w-full overflow-hidden bg-slate-50 text-slate-900">
       <PageBackground />
 
       {/* Main Layout Container */}
       <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-2 sm:p-4 md:p-6">
-        <div className="flex h-full w-full max-w-7xl flex-col gap-4 md:flex-row">
+        <div className="flex h-full w-full max-w-7xl flex-col">
 
-          {/* Unified Layout Container */}
-          <div className="relative flex h-full w-full flex-col overflow-hidden rounded-3xl md:flex-row">
-
-            {/* Left Panel: Tutor (Live2D) */}
-            <aside
-              className="relative flex h-80 w-full shrink-0 flex-col overflow-hidden md:h-full md:w-80 lg:w-96"
-              role="complementary"
-              aria-label="Tutor Character"
-            >
-              <TutorPane />
-            </aside>
-
-            {/* Right Panel: Chat Interface */}
-            <main
-              className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-3xl border border-white/40 bg-white/30 shadow-xl backdrop-blur-xl"
-              role="main"
-              aria-label="Chat Interface"
-            >
+          {/* Single pane: chat page with Live2D centered inside */}
+          <main
+            className="relative flex h-full w-full flex-col overflow-hidden rounded-3xl border border-white/40 bg-white/30 shadow-xl backdrop-blur-xl"
+            role="main"
+            aria-label="Chat Interface"
+          >
+            {/* Live2D character layer: centered in chat page (pointer-events-none so chat is clickable) */}
+            <div className="absolute inset-0 z-0 flex items-center justify-center pointer-events-none" aria-hidden>
+              <div className="h-full w-full max-w-3xl flex items-center justify-center">
+                <TutorPane />
+              </div>
+            </div>
+            {/* Chat UI on top */}
+            <div className="relative z-10 flex min-h-0 flex-1 flex-col">
               <ChatPage />
-            </main>
-
-          </div>
+            </div>
+          </main>
 
         </div>
       </div>
