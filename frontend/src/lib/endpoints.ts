@@ -43,6 +43,18 @@ export interface StreamDonePayload {
   reminder?: ReminderPayload;
   openviking_error?: string;
   stream_id?: string;
+  hitl?: boolean;
+}
+
+export interface StreamHitlCheckpointPayload {
+  checkpoint_id: string;
+  session_id: string;
+  checkpoint: string;
+  summary: string;
+  params?: Record<string, unknown>;
+  options?: string[];
+  allow_free_input?: boolean;
+  stream_id?: string;
 }
 
 export interface StreamErrorPayload {
@@ -56,6 +68,7 @@ export type StreamEvent =
   | { type: "mood"; payload: StreamMoodPayload }
   | { type: "done"; payload: StreamDonePayload }
   | { type: "reminder"; payload: ReminderPayload }
+  | { type: "hitl_checkpoint"; payload: StreamHitlCheckpointPayload }
   | { type: "error"; payload: StreamErrorPayload };
 
 export const listDocuments = async (): Promise<DocumentMeta[]> => {
@@ -260,6 +273,25 @@ export const chat = async (
     history,
     doc_id: docId,
     session_id: sessionId,
+  }, { headers: chatHeaders() });
+  return data;
+};
+
+export type HitlResponsePayload =
+  | { approved: true; overrides?: Record<string, unknown> }
+  | { cancelled: true }
+  | { selected: string }
+  | { free_input: string };
+
+export const submitHitlResponse = async (
+  sessionId: string,
+  checkpointId: string,
+  response: HitlResponsePayload,
+): Promise<ChatResponse> => {
+  const { data } = await apiClient.post<ChatResponse>("/api/ai/chat/hitl-response", {
+    session_id: sessionId,
+    checkpoint_id: checkpointId,
+    response,
   }, { headers: chatHeaders() });
   return data;
 };

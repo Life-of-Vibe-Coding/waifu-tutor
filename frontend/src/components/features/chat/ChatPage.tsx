@@ -7,9 +7,11 @@ import {
   chat,
   listDueReminders,
   streamChat,
+  submitHitlResponse,
   uploadDocument,
   getInitialGreeting,
   type StreamDonePayload,
+  type StreamHitlCheckpointPayload,
   type StreamMoodPayload,
   type StreamTokenPayload,
 } from "@/lib/endpoints";
@@ -72,6 +74,8 @@ export const ChatPage = () => {
   } | null>(null);
   const [isBubbleVisible, setIsBubbleVisible] = useState(false);
   const [responseId, setResponseId] = useState(0);
+  const [pendingHitl, setPendingHitl] = useState<StreamHitlCheckpointPayload | null>(null);
+  const [hitlSubmitting, setHitlSubmitting] = useState(false);
 
   const activeDocId = useAppStore((s) => s.activeDocId);
   const sessionId = useAppStore((s) => s.sessionId);
@@ -360,6 +364,17 @@ export const ChatPage = () => {
           const actions = queueRef.current.upsertMeta(streamId, { reminder: br }, "sse");
           if (actions.length > 0) applyQueueActions(actions);
         }
+        if (event.type === "hitl_checkpoint") {
+          const payload = event.payload as StreamHitlCheckpointPayload;
+          const streamId = resolveStreamId(payload.stream_id);
+          touchedStreamIds.add(streamId);
+          const actions = queueRef.current.markDone(streamId, undefined, {
+            sessionId: payload.session_id ?? null,
+          });
+          if (actions.length > 0) applyQueueActions(actions);
+          setPendingHitl(payload);
+          if (payload.session_id) setSessionId(payload.session_id);
+        }
         if (event.type === "done") {
           const donePayload = event.payload as StreamDonePayload;
           const streamId = resolveStreamId(donePayload.stream_id);
@@ -382,10 +397,15 @@ export const ChatPage = () => {
       }
       try {
         const response = await chat(userMessage.content, history, docId, sessionId);
+        if (response.hitl) {
+          setPendingHitl(response.hitl as StreamHitlCheckpointPayload);
+          if (response.session_id) setSessionId(response.session_id);
+          return;
+        }
         const fallbackQueueStreamId = nextLocalQueueId("chat-fallback");
         const actions = queueRef.current.enqueueLocalMessage(
           fallbackQueueStreamId,
-          response.message.content,
+          response.message!.content,
           "sse",
           {
             sessionId: response.session_id ?? null,
@@ -410,6 +430,89 @@ export const ChatPage = () => {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleHitlApprove = async () => {
+    if (!pendingHitl || hitlSubmitting) return;
+    setHitlSubmitting(true);
+    try {
+      const response = await submitHitlResponse(
+        pendingHitl.session_id,
+        pendingHitl.checkpoint_id,
+        { approved: true },
+      );
+      setPendingHitl(null);
+      if (response.hitl) {
+        setPendingHitl(response.hitl as StreamHitlCheckpointPayload);
+        if (response.session_id) setSessionId(response.session_id);
+      } else if (response.message) {
+        const fallbackStreamId = nextLocalQueueId("hitl-resume");
+        const actions = queueRef.current.enqueueLocalMessage(
+          fallbackStreamId,
+          response.message.content,
+          "sse",
+          {
+            sessionId: response.session_id ?? null,
+            mood: response.mood,
+            reminder: response.reminder,
+          },
+        );
+        if (actions.length > 0) applyQueueActions(actions);
+        if (response.mood) setMood(response.mood);
+      }
+    } catch (err) {
+      setError((err as Error).message ?? "Failed to submit");
+    } finally {
+      setHitlSubmitting(false);
+    }
+  };
+
+  const handleHitlCancel = async () => {
+    if (!pendingHitl || hitlSubmitting) return;
+    setHitlSubmitting(true);
+    try {
+      await submitHitlResponse(pendingHitl.session_id, pendingHitl.checkpoint_id, { cancelled: true });
+      setPendingHitl(null);
+    } catch (err) {
+      setError((err as Error).message ?? "Failed to cancel");
+    } finally {
+      setHitlSubmitting(false);
+    }
+  };
+
+  const handleHitlSelect = async (option: string) => {
+    if (!pendingHitl || hitlSubmitting) return;
+    setHitlSubmitting(true);
+    try {
+      const response = await submitHitlResponse(
+        pendingHitl.session_id,
+        pendingHitl.checkpoint_id,
+        { selected: option },
+      );
+      setPendingHitl(null);
+      if (response.hitl) {
+        setPendingHitl(response.hitl as StreamHitlCheckpointPayload);
+        if (response.session_id) setSessionId(response.session_id);
+      } else if (response.message) {
+        const fallbackStreamId = nextLocalQueueId("hitl-resume");
+        const actions = queueRef.current.enqueueLocalMessage(
+          fallbackStreamId,
+          response.message.content,
+          "sse",
+          {
+            sessionId: response.session_id ?? null,
+            mood: response.mood,
+            reminder: response.reminder,
+          },
+        );
+        if (actions.length > 0) applyQueueActions(actions);
+        if (response.mood) setMood(response.mood);
+      }
+    } catch (err) {
+      setError((err as Error).message ?? "Failed to submit");
+    } finally {
+      setHitlSubmitting(false);
     }
   };
 
@@ -529,6 +632,74 @@ export const ChatPage = () => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* HITL checkpoint modal */}
+      <AnimatePresence>
+        {pendingHitl && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            onClick={(e) => e.target === e.currentTarget && !hitlSubmitting && setPendingHitl(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[85vh] overflow-hidden flex flex-col border border-slate-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-5 overflow-y-auto flex-1">
+                <h3 className="text-lg font-semibold text-slate-800 mb-2">Confirm</h3>
+                <p className="text-slate-700 whitespace-pre-wrap mb-4">{pendingHitl.summary}</p>
+                {pendingHitl.params && Object.keys(pendingHitl.params).length > 0 && (
+                  <pre className="text-xs bg-slate-100 rounded-lg p-3 mb-4 overflow-x-auto text-slate-700">
+                    {JSON.stringify(pendingHitl.params, null, 2)}
+                  </pre>
+                )}
+                {pendingHitl.options && pendingHitl.options.length > 0 && (
+                  <div className="space-y-2 mb-4">
+                    <p className="text-sm font-medium text-slate-600">Choose an option:</p>
+                    <div className="flex flex-col gap-2">
+                      {pendingHitl.options.map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          disabled={hitlSubmitting}
+                          onClick={() => handleHitlSelect(opt)}
+                          className="text-left rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-800 hover:bg-slate-100 disabled:opacity-50"
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-3 p-5 border-t border-slate-200 bg-slate-50/80">
+                <button
+                  type="button"
+                  disabled={hitlSubmitting}
+                  onClick={handleHitlApprove}
+                  className="flex-1 rounded-xl bg-emerald-600 text-white px-4 py-2.5 text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {hitlSubmitting ? "Submitting…" : "Approve"}
+                </button>
+                <button
+                  type="button"
+                  disabled={hitlSubmitting}
+                  onClick={handleHitlCancel}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <header className="flex shrink-0 items-center justify-between border-b border-white/20 bg-white/10 px-6 py-4 backdrop-blur-md">
           <div className="flex items-center gap-3">
@@ -549,6 +720,7 @@ export const ChatPage = () => {
                 setError(null);
                 setValidationError(null);
                 setUploadNotice(null);
+                setPendingHitl(null);
                 queueRef.current.clear();
                 queueMessageIndexByStreamRef.current.clear();
               }}

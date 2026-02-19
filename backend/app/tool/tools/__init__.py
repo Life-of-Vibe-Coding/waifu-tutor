@@ -11,6 +11,9 @@ from . import (
     get_current_time,
     list_recent_uploads,
     list_subjects,
+    load_skill,
+    read_file,
+    request_human_approval,
     set_break_reminder,
     set_focus_timer,
 )
@@ -22,11 +25,17 @@ _TOOL_MODULES = [
     list_recent_uploads,
     list_subjects,
     create_subject,
+    load_skill,
+    read_file,
+    request_human_approval,
 ]
 
 CHAT_TOOLS: list[dict[str, Any]] = [m.TOOL_SCHEMA for m in _TOOL_MODULES]
 
 _NAME_TO_MODULE = {m.TOOL_SCHEMA["function"]["name"]: m for m in _TOOL_MODULES}
+
+# When request_human_approval runs, we return this and a hitl_payload so the chat layer pauses.
+HITL_SENTINEL = getattr(request_human_approval, "HITL_SENTINEL", "__HITL_PAUSE__")
 
 
 def execute_tool(
@@ -35,8 +44,10 @@ def execute_tool(
     session_id: str,
     user_id: str,
     user_timezone: str | None = None,
-) -> tuple[str, dict[str, Any] | None]:
-    """Execute a tool by name with given JSON arguments. Returns (result_string, reminder_payload or None)."""
+) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+    """Execute a tool by name. Returns (result_string, reminder_payload or None, hitl_payload or None).
+    When the tool is request_human_approval, hitl_payload is set and the chat layer must pause.
+    """
     try:
         args = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
     except json.JSONDecodeError as e:
@@ -45,7 +56,7 @@ def execute_tool(
             log_tool_call(session_id, name, arguments, result, None)
         except Exception:
             pass
-        return result, None
+        return result, None, None
 
     module = _NAME_TO_MODULE.get(name)
     if module is None:
@@ -54,11 +65,15 @@ def execute_tool(
             log_tool_call(session_id, name, args, result, None)
         except Exception:
             pass
-        return result, None
+        return result, None, None
 
     result, break_payload = module.run(args, session_id, user_id, user_timezone=user_timezone)
+    hitl_payload: dict[str, Any] | None = None
+    if result == HITL_SENTINEL and isinstance(break_payload, dict) and break_payload.get("_hitl"):
+        hitl_payload = {k: v for k, v in break_payload.items() if k != "_hitl"}
+        break_payload = None
     try:
-        log_tool_call(session_id, name, args, result, break_payload)
+        log_tool_call(session_id, name, args, result if result != HITL_SENTINEL else "(hitl)", break_payload)
     except Exception:
         pass
-    return result, break_payload
+    return result, break_payload, hitl_payload

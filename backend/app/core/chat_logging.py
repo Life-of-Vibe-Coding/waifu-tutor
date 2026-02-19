@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -94,7 +95,15 @@ def _write_chat_log(
     if extra:
         lines.append(extra.strip())
     msg = "\n".join(lines)
-    _get_chat_file_logger("file", "chat").info(msg)
+    logger = _get_chat_file_logger("file", "chat")
+    logger.info(msg)
+    # Flush so tail -f and editors see new content immediately
+    for h in logger.handlers:
+        h.flush()
+    # Echo CHAT LLM ROUND (prompts) to stderr so they appear in the terminal
+    if section == "CHAT LLM ROUND":
+        print(msg, file=sys.stderr)
+        sys.stderr.flush()
 
 
 def log_agent_context_startup(context_text: str) -> None:
@@ -139,27 +148,53 @@ def log_chat_context(
     _write_chat_log("CHAT CONTEXT", session_id, payload)
 
 
+# Max characters to log per message role to avoid huge log files (None = no truncation)
+_CHAT_HISTORY_LOG_MAX_CHARS = 16_000
+
+
+def _truncate_for_log(text: str, max_chars: int = _CHAT_HISTORY_LOG_MAX_CHARS) -> str:
+    if not text or max_chars is None or len(text) <= max_chars:
+        return text or ""
+    segment = text[: max_chars + 1]
+    last_break = max(segment.rfind(" "), segment.rfind("\n"))
+    if last_break >= 0:
+        cut = text[:last_break]
+    else:
+        cut = text[:max_chars]
+    return cut + "\n... [truncated]"
+
+
 def log_chat_llm_round(
     session_id: str,
     round_index: int,
     messages_sent: list[dict[str, Any]],
     content: str | None,
     tool_calls: list[dict[str, Any]] | None,
+    thought: str | None = None,
 ) -> None:
-    """Log one LLM round: messages sent (summary) and response (content + tool_calls)."""
-    # Summarize messages for readability (role + content length or tool_calls)
-    summary_lines = []
+    """Log one LLM round: thought (ReAct), chat history, and response (content + tool_calls)."""
+    # Build full chat history for this round: system prompt, user prompt, agent prompt, tool results
+    history_lines = []
     for i, m in enumerate(messages_sent):
         role = m.get("role", "?")
-        content = m.get("content") or ""
+        msg_content = m.get("content") or ""
         tc = m.get("tool_calls")
+        label = {"system": "system_prompt", "user": "user_prompt", "assistant": "agent_prompt", "tool": "tool_result"}.get(role, role)
+        history_lines.append(f"  --- [{i}] {role} ({label}) ---")
         if tc:
-            summary_lines.append(f"  [{i}] {role}: (content_len={len(content or '')}) tool_calls={len(tc)}")
-        else:
-            summary_lines.append(f"  [{i}] {role}: {content or ''}")
-    messages_block = "\n".join(summary_lines)
+            history_lines.append(f"  tool_calls: {len(tc)}")
+            for j, t in enumerate(tc):
+                fn = t.get("function") or {}
+                history_lines.append(f"    [{j}] id={t.get('id', '')} name={fn.get('name', '')} args={fn.get('arguments', '{}')}")
+        if msg_content:
+            history_lines.append(_truncate_for_log(msg_content))
+        history_lines.append("")
+    chat_history_block = "\n".join(history_lines)
 
-    out_lines = [f"  content: {content or '(none)'}"]
+    out_lines = []
+    if thought:
+        out_lines.append(f"  thought (ReAct):\n{_truncate_for_log(thought)}")
+    out_lines.append(f"  content: {_truncate_for_log(content or '') or '(none)'}")
     if tool_calls:
         out_lines.append(f"  tool_calls: {len(tool_calls)}")
         for j, tc in enumerate(tool_calls):
@@ -168,8 +203,8 @@ def log_chat_llm_round(
     payload = f"""
   round: {round_index}
 
-  messages_sent (summary):
-{messages_block}
+  chat_history (system / user / agent / tool):
+{chat_history_block}
 
   response:
 {chr(10).join(out_lines)}

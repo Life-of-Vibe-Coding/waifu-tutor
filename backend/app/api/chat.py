@@ -34,8 +34,14 @@ from app.core.chat_logging import (
 )
 from app.tool import CHAT_TOOLS, execute_tool
 from app.context import get_agent_context_text
+from app.hitl import set_pending, consume_pending
 
 logger = logging.getLogger(__name__)
+
+# Max tool rounds per turn (avoids runaway loops)
+MAX_TOOL_ROUNDS = 20
+# Retries for empty assistant turns (no content and no tool calls) before surfacing recovery text.
+MAX_EMPTY_RESPONSE_RETRIES = 4
 router = APIRouter()
 
 
@@ -70,6 +76,28 @@ def _normalize_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
     return out
 
 
+def _messages_to_conversation_history(
+    messages: list[dict[str, Any]],
+    max_items: int = 12,
+    max_content_len: int = 2000,
+) -> list[dict[str, str]]:
+    """Build compact conversation history from tool-loop messages for fallback chat."""
+    history: list[dict[str, str]] = []
+    for m in messages or []:
+        role = m.get("role")
+        if role == "tool":
+            continue
+        if role not in ("user", "assistant"):
+            continue
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if len(content) > max_content_len:
+            content = content[:max_content_len] + "..."
+        history.append({"role": role, "content": content})
+    return history[-max_items:]
+
+
 def _save_exchange(session_id: str, user_msg: str, assistant_msg: str) -> None:
     user_id = _demo_user_id()
     upsert_chat_session(session_id, user_id=user_id, title=user_msg[:80])
@@ -86,6 +114,94 @@ def _resolve_attachment_title(doc_id: str | None) -> str | None:
 
 
 
+def _run_tool_loop(
+    messages: list[dict[str, Any]],
+    session_id: str,
+    user_id: str,
+    user_timezone: str | None = None,
+) -> tuple[str | None, bool, dict[str, Any] | None, dict[str, Any] | None]:
+    """Run agentic tool loop. Returns (reply_text or None, used_fallback, reminder_payload, hitl_payload).
+    When hitl_payload is set, reply_text is None and the chat layer must pause and surface the checkpoint.
+    """
+    reminder_payload: dict[str, Any] | None = None
+    empty_round_retries = 0
+    for round_index in range(MAX_TOOL_ROUNDS):
+        content, tool_calls, thought = complete_with_tools(messages, CHAT_TOOLS)
+        try:
+            log_chat_llm_round(session_id, round_index + 1, messages, content, tool_calls, thought=thought)
+        except Exception:
+            pass
+        if content and not tool_calls:
+            try:
+                log_chat_final_response(session_id, content, False, reminder_payload)
+            except Exception:
+                pass
+            return content, False, reminder_payload, None
+        if not tool_calls:
+            # Some model responses contain only <thought> (stripped) and no tool call.
+            # Give the model a short retry nudge before falling back.
+            if not (content or "").strip() and empty_round_retries < MAX_EMPTY_RESPONSE_RETRIES:
+                empty_round_retries += 1
+                # Escalate the instruction after repeated empty turns so we recover without
+                # switching to a generic fallback completion that lacks tool-loop context.
+                if empty_round_retries < MAX_EMPTY_RESPONSE_RETRIES:
+                    retry_instruction = (
+                        "You returned an empty response. Continue from the latest context/tool result. "
+                        "Output exactly one <thought>...</thought> block, then either provide tool calls "
+                        "or the final assistant response."
+                    )
+                else:
+                    retry_instruction = (
+                        "You repeatedly returned an empty response. Continue from the latest context/tool result "
+                        "and provide the final assistant response in this turn. Do not leave content empty."
+                    )
+                messages.append({
+                    "role": "user",
+                    "content": retry_instruction,
+                })
+                continue
+            if not (content or "").strip():
+                recovery_text = (
+                    "I hit a temporary generation issue while finishing that request. "
+                    "Please reply with \"continue\" and I will resume from the last step."
+                )
+                try:
+                    log_chat_final_response(session_id, recovery_text, True, reminder_payload)
+                except Exception:
+                    pass
+                return recovery_text, True, reminder_payload, None
+            break
+        empty_round_retries = 0
+        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
+        assistant_msg["tool_calls"] = tool_calls
+        messages.append(assistant_msg)
+        for tc in tool_calls:
+            name = (tc.get("function") or {}).get("name", "")
+            args = (tc.get("function") or {}).get("arguments", "{}")
+            result, br, hitl_payload = execute_tool(name, args, session_id, user_id, user_timezone=user_timezone)
+            if hitl_payload:
+                checkpoint_id = set_pending(
+                    session_id=session_id,
+                    user_id=user_id,
+                    messages=messages,
+                    tool_call_id=tc.get("id", ""),
+                    hitl_input=hitl_payload,
+                    user_timezone=user_timezone,
+                )
+                hitl_payload["checkpoint_id"] = checkpoint_id
+                hitl_payload["session_id"] = session_id
+                return None, False, reminder_payload, hitl_payload
+            if br:
+                reminder_payload = br
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.get("id", ""),
+                "content": result,
+            })
+    # Loop ended without final content (e.g. API returned no content and no tool_calls): signal fallback
+    return None, True, reminder_payload, None
+
+
 def _complete_chat(
     msg: str,
     context_texts: list[str],
@@ -94,60 +210,37 @@ def _complete_chat(
     session_id: str,
     user_id: str,
     user_timezone: str | None = None,
-) -> tuple[str, bool, dict[str, Any] | None]:
-    """Run chat completion (native tool loop). Returns (reply_text, used_fallback, reminder_payload or None)."""
+) -> tuple[str | None, bool, dict[str, Any] | None, dict[str, Any] | None]:
+    """Run chat completion (native tool loop). Returns (reply_text or None, used_fallback, reminder_payload, hitl_payload).
+    When hitl_payload is set, reply_text is None and the client must show the checkpoint and call hitl-response to resume.
+    """
     agent_context = get_agent_context_text()
     context_block = "\n\n".join(context_texts[:14])
     user_content = (
         f"Context:\n{context_block}\n\nUser question:\n{msg}\n\n"
-        "Reply in character: accurate, helpful, concise, and encouraging. Use tools when appropriate."
+        "Reply in character: accurate, helpful, concise, and encouraging. Use tools when appropriate.\n\n"
+        "Before your reply or any tool call, output a single <thought>...</thought> block (one or a few sentences) "
+        "describing: 1) current state (what you know, what the user wants), 2) why you are choosing this step "
+        "(e.g. answering directly, or calling which tool and why). Then give your actual reply or tool calls."
     )
     if agent_context:
         user_content = f"{agent_context}\n\n{user_content}"
     messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
-
-    reminder_payload: dict[str, Any] | None = None
-    max_rounds = 3
-    for round_index in range(max_rounds):
-        content, tool_calls = complete_with_tools(messages, CHAT_TOOLS)
-        try:
-            log_chat_llm_round(session_id, round_index + 1, messages, content, tool_calls)
-        except Exception:
-            pass
-        if content and not tool_calls:
-            try:
-                log_chat_final_response(session_id, content, False, reminder_payload)
-            except Exception:
-                pass
-            return content, False, reminder_payload
-        if tool_calls:
-            assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
-            assistant_msg["tool_calls"] = tool_calls
-            messages.append(assistant_msg)
-            for tc in tool_calls:
-                name = (tc.get("function") or {}).get("name", "")
-                args = (tc.get("function") or {}).get("arguments", "{}")
-                result, br = execute_tool(name, args, session_id, user_id, user_timezone=user_timezone)
-                if br:
-                    reminder_payload = br
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": result,
-                })
-            continue
-        break
-    text, used_fallback = ai_chat(
-        msg, context_texts, attachment_title,
-        conversation_history=history,
-    )
+    text, used_fallback, reminder_payload, hitl_payload = _run_tool_loop(messages, session_id, user_id, user_timezone)
+    if hitl_payload is not None:
+        return None, False, reminder_payload, hitl_payload
+    if text is not None:
+        return text, used_fallback, reminder_payload, None
+    # Fallback when loop ended without content
+    fallback_history = _messages_to_conversation_history(messages)
+    text, used_fallback = ai_chat(msg, context_texts, attachment_title, conversation_history=fallback_history or history)
     if not (text or "").strip():
         text = "I'm here! Something went wrong on my side—please try again or rephrase."
     try:
         log_chat_final_response(session_id, text, used_fallback, reminder_payload)
     except Exception:
         pass
-    return text, used_fallback, reminder_payload
+    return text, used_fallback, reminder_payload, None
 
 
 def _run_chat(body: ChatBody, user_timezone: str | None = None) -> dict[str, Any]:
@@ -190,13 +283,17 @@ def _run_chat(body: ChatBody, user_timezone: str | None = None) -> dict[str, Any
         log_chat_context(session_id, context_texts, attachment_title, "")
     except Exception:
         pass
-    text, used_fallback, reminder = _complete_chat(
+    text, used_fallback, reminder, hitl_payload = _complete_chat(
         msg, context_texts, attachment_title, effective_history, session_id, user_id,
         user_timezone=user_timezone,
     )
-    mood = mood_from_text(text)
-
-    _save_exchange(session_id, msg, text)
+    if hitl_payload is not None:
+        return {
+            "hitl": hitl_payload,
+            "session_id": session_id,
+        }
+    mood = mood_from_text(text or "")
+    _save_exchange(session_id, msg, text or "")
 
     response: dict[str, Any] = {
         "message": {"role": "assistant", "content": text, "created_at": datetime.now(tz=timezone.utc).isoformat()},
@@ -233,6 +330,72 @@ def chat(request: Request, body: ChatBody) -> dict:
     return _run_chat(body, user_timezone=_user_timezone_from_request(request))
 
 
+class HitlResponseBody(BaseModel):
+    """Body for resuming after a HITL checkpoint."""
+    session_id: str
+    checkpoint_id: str
+    response: dict[str, Any] = Field(
+        ...,
+        description="Either { approved: true, overrides?: object }, { cancelled: true }, { selected: string }, or { free_input: string }",
+    )
+
+
+@router.post("/chat/hitl-response")
+def hitl_response(request: Request, body: HitlResponseBody) -> dict[str, Any]:
+    """Resume the agent loop after the user responds to a HITL checkpoint."""
+    user_timezone = _user_timezone_from_request(request)
+    user_id = _demo_user_id()
+    entry = consume_pending(body.checkpoint_id)
+    if not entry:
+        raise_chat_validation(404, ChatErrorCode.INVALID_REQUEST, "Checkpoint expired or not found.")
+    messages: list[dict[str, Any]] = list(entry["messages"])
+    tool_call_id = entry["tool_call_id"]
+    # Build tool result from user response
+    resp = body.response or {}
+    if resp.get("cancelled"):
+        tool_result = json.dumps({"approved": False, "cancelled": True})
+    elif resp.get("approved") is not False:
+        tool_result = json.dumps({
+            "approved": True,
+            "overrides": resp.get("overrides"),
+            "selected": resp.get("selected"),
+            "free_input": resp.get("free_input"),
+        })
+    else:
+        tool_result = json.dumps({"approved": False})
+    messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": tool_result})
+    session_id = entry["session_id"]
+    text, used_fallback, reminder, hitl_payload = _run_tool_loop(
+        messages, session_id, user_id, user_timezone=user_timezone,
+    )
+    if hitl_payload is not None:
+        return {"hitl": hitl_payload, "session_id": session_id}
+    if text is None:
+        text, _ = ai_chat(
+            messages[0].get("content", "") if messages else "",
+            [], None, conversation_history=[],
+        )
+        if not (text or "").strip():
+            text = "Done. Anything else?"
+        used_fallback = True
+    try:
+        log_chat_final_response(session_id, text, used_fallback, reminder)
+    except Exception:
+        pass
+    mood = mood_from_text(text)
+    # Persist final assistant message (user side already has the checkpoint; we don't re-save user msg)
+    insert_chat_message(
+        str(uuid.uuid4()), session_id, user_id, role="assistant", content=text,
+    )
+    out: dict[str, Any] = {
+        "message": {"role": "assistant", "content": text, "created_at": datetime.now(tz=timezone.utc).isoformat()},
+        "mood": mood,
+        "session_id": session_id,
+        "model_fallback": used_fallback,
+    }
+    if reminder:
+        out["reminder"] = reminder
+    return out
 
 
 def _build_chat_context(body: ChatBody) -> tuple[str, bool, str, list[str], str | None, list[dict[str, str]]]:
@@ -279,14 +442,18 @@ def chat_stream(request: Request, body: ChatBody) -> StreamingResponse:
                 pass
 
             user_id = _demo_user_id()
-            text, used_fallback, reminder = _complete_chat(
+            text, used_fallback, reminder, hitl_payload = _complete_chat(
                 msg, context_texts, attachment_title, effective_history, session_id, user_id,
                 user_timezone=user_timezone,
             )
+            if hitl_payload is not None:
+                yield f"event: hitl_checkpoint\ndata: {json.dumps({**hitl_payload, 'stream_id': stream_id})}\n\n"
+                yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'stream_id': stream_id, 'hitl': True})}\n\n"
+                return
             if not (text or "").strip():
                 text = fallback_message
-            mood = mood_from_text(text)
-            _save_exchange(session_id, msg, text)
+            mood = mood_from_text(text or "")
+            _save_exchange(session_id, msg, text or "")
         except Exception as e:
             logger.exception("Chat stream error: %s", e)
             session_id = body.session_id or str(uuid.uuid4())

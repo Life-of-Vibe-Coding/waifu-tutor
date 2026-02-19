@@ -73,14 +73,26 @@ export interface ReminderPayload {
   kind?: "break" | "focus";
 }
 
+export interface HitlCheckpointPayload {
+  checkpoint_id: string;
+  session_id: string;
+  checkpoint: string;
+  summary: string;
+  params?: Record<string, unknown>;
+  options?: string[];
+  allow_free_input?: boolean;
+}
+
 export interface ChatResponse {
-  message: ChatMessage & { created_at?: string };
-  context: ChatContextChunk[];
-  mood: CharacterMood;
+  message?: ChatMessage & { created_at?: string };
+  context?: ChatContextChunk[];
+  mood?: CharacterMood;
   session_id?: string;
   openviking_error?: string;
   rag_trace?: unknown;
   reminder?: ReminderPayload;
+  /** When set, the client should show the checkpoint UI and call submitHitlResponse to resume. */
+  hitl?: HitlCheckpointPayload;
 }
 
 export interface StudyProgress {

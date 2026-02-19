@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     volcengine_api_key: str | None = None
     volcengine_chat_base: str = "https://ark.cn-beijing.volces.com/api/v3"
     chat_model: str = "doubao-seed-2-0-mini-260215"
+    # Timeout in seconds for chat/tool completion (long skill+subskill context may need >45s)
+    chat_request_timeout: float = 90.0
 
     # Demo user
     demo_user_id: str = "demo-user"
@@ -31,6 +33,9 @@ class Settings(BaseSettings):
 
     # Logging: base directory (default: backend/logs). Subdirs: chat/. Set LOG_DIR in .env to override.
     log_dir: Path = Path("logs")
+
+    # Skills: root directory for hierarchical skills (SKILL.md + subskills). Default: docs/skill-framework.
+    skills_dir: Path = _PROJECT_ROOT / "docs" / "skill-framework"
 
     def sqlite_path(self) -> Path:
         url = self.database_url.strip()

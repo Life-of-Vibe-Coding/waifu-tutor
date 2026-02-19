@@ -13,7 +13,7 @@ from app.core.errors import ChatErrorCode, detail
 from app.core.chat_logging import log_agent_context_startup
 from app.core.text_logging import log_text
 from app.db.session import init_db
-from app.context import load_agent_context, get_agent_context_text
+from app.context import load_agent_context, get_agent_context_text  # noqa: F401
 
 
 @asynccontextmanager
