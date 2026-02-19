@@ -1,4 +1,5 @@
 """FastAPI application entrypoint."""
+import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -9,19 +10,27 @@ from fastapi.exceptions import RequestValidationError
 
 from app.api import auth, chat, documents, health, not_implemented, sessions
 from app.core.errors import ChatErrorCode, detail
-from app.db.openviking_client import close_openviking_client
+from app.core.chat_logging import log_agent_context_startup
+from app.core.text_logging import log_text
 from app.db.session import init_db
+from app.db.skills_sync import sync_skills_into_openviking
+from app.context import load_agent_context, get_agent_context_text
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Initialize DB and resources on startup."""
     init_db()
+    sync_skills_into_openviking()
+    load_agent_context()
+    context_text = get_agent_context_text()
+    log_agent_context_startup(context_text)
+    log_text(context_text or "(empty)", section="AGENT CONTEXT (startup)")
+    print("--- Agent context ---", flush=True)
+    print(context_text if context_text else "(empty)", flush=True)
+    print("---", flush=True)
+    sys.stdout.flush()
     yield
-    from app.services.scheduler import shutdown_scheduler
-
-    shutdown_scheduler()
-    close_openviking_client()
 
 
 def _validation_error_message(errors: list) -> str:
@@ -43,7 +52,7 @@ def _validation_error_message(errors: list) -> str:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Waifu Tutor API",
-        description="Backend for Waifu Tutor (auth, documents, chat, memory, OpenViking file search)",
+        description="Backend for Waifu Tutor (auth, documents, chat, memory)",
         version="0.2.0",
         lifespan=lifespan,
     )

@@ -419,15 +419,12 @@ export const ChatPage = () => {
   ) => {
     setUploadNotice(`Uploading ${validFiles.length} files...`);
     const uploadedNames: string[] = [];
-    let lastDocId: string | null = null;
     let lastErrorMsg = "";
 
     for (const file of validFiles) {
       try {
         const doc = await uploadDocument(file, folderName);
         uploadedNames.push(doc.filename);
-        lastDocId = doc.id;
-        setActiveDocId(doc.id);
       } catch (err: unknown) {
         const errObj = err as { response?: { data?: { detail?: string | { message?: string }; message?: string } }; message?: string };
         console.error("Upload failed for", file.name, err);
@@ -441,6 +438,8 @@ export const ChatPage = () => {
     if (uploadedNames.length > 0) {
       await queryClient.invalidateQueries({ queryKey: ["documents"] });
       setUploadNotice(null);
+      // Upload confirmation already includes uploaded filenames; avoid duplicate doc attachment.
+      setActiveDocId(null);
       triggerCelebration();
       setMood("excited");
       bumpAffection(2);
@@ -454,7 +453,7 @@ export const ChatPage = () => {
       const uploadAckStreamId = nextLocalQueueId("upload-ack");
       const ackActions = queueRef.current.enqueueLocalMessage(uploadAckStreamId, UPLOAD_ACK_MESSAGE, "local");
       if (ackActions.length > 0) applyQueueActions(ackActions);
-      void send(msg, lastDocId, { historyAlreadySet: historyWithUser });
+      void send(msg, null, { historyAlreadySet: historyWithUser });
     } else {
       setUploadNotice(`Upload failed: ${lastErrorMsg}`);
       setMood("sad");
@@ -746,7 +745,7 @@ export const ChatPage = () => {
                     {messages.length === 0
                       ? "(none)"
                       : messages
-                          .map((m, i) => `[${i}] ${m.role}: ${m.content.slice(0, 200)}${m.content.length > 200 ? "…" : ""}`)
+                          .map((m, i) => `[${i}] ${m.role}: ${m.content}`)
                           .join("\n\n")}
                   </pre>
                 </div>

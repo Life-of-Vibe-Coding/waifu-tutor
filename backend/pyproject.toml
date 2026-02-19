@@ -12,8 +12,8 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "pypdf>=5.0.0",
     "python-docx>=1.0.0",
-    "openviking>=0.1.0",
     "apscheduler>=3.10.0",
+    "openviking>=0.1.14",
 ]
 
 [project.optional-dependencies]

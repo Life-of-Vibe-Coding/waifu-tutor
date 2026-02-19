@@ -1,8 +1,8 @@
 """Shared infrastructure for typed log directories and file loggers.
 
 Log layout: log_dir/<type>/<basename>.log
-- chat  -> logs/chat/chat.log
-- viking -> logs/viking/viking.log
+- chat -> logs/chat/chat.log
+- all  -> logs/all/all.log (all text via app.core.text_logging.log_text)
 Add new types by using get_log_dir_for() and get_typed_file_logger().
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ def get_log_base_dir(settings: Any = None) -> Path:
 
 
 def get_log_dir_for(log_type: str, settings: Any = None) -> Path:
-    """Return log_dir/<log_type>, e.g. logs/chat or logs/viking. Creates the dir if needed."""
+    """Return log_dir/<log_type>, e.g. logs/chat. Creates the dir if needed."""
     base = get_log_base_dir(settings)
     sub = base / log_type
     sub.mkdir(parents=True, exist_ok=True)

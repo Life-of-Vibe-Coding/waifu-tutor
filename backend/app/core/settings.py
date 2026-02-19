@@ -1,10 +1,12 @@
 """Application settings from environment."""
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve .env path relative to backend/ (works regardless of cwd)
 _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = _BACKEND_DIR.parent
 _ENV_FILE = _BACKEND_DIR / ".env"
 
 
@@ -28,14 +30,17 @@ class Settings(BaseSettings):
     demo_email: str = "demo@waifu.local"
     demo_display_name: str = "Demo Student"
 
-    # Logging: base directory (default: backend/logs). Subdirs: chat/, viking/. Set LOG_DIR in .env to override.
+    # Logging: base directory (default: backend/logs). Subdirs: chat/. Set LOG_DIR in .env to override.
     log_dir: Path = Path("logs")
 
-    # OpenViking context DB (uses same data root as SQLite: db/data/openviking)
-    openviking_data_dir: str | None = None  # None = auto: same base as DB
-    openviking_config_file: str | None = None
-    openviking_agfs_port: int = 9090
-    openviking_auto_commit_turns: int = 24
+    # OpenViking: config file (embedding + VLM) and data directory. Config defaults to project .openviking/ov.conf.
+    openviking_config_file: Path = _PROJECT_ROOT / ".openviking" / "ov.conf"
+    openviking_data_dir: Path = _PROJECT_ROOT / "db" / "data" / "openviking"
+
+    @field_validator("openviking_config_file", "openviking_data_dir", mode="before")
+    @classmethod
+    def _path_from_str(cls, v: Path | str) -> Path:
+        return Path(v) if isinstance(v, str) else v
 
     def sqlite_path(self) -> Path:
         url = self.database_url.strip()
@@ -44,15 +49,3 @@ class Settings(BaseSettings):
                 url = url[len(prefix) :].lstrip("/")
                 break
         return Path(url) if url else Path("./data/waifu_tutor.db")
-
-    def openviking_path(self) -> Path:
-        """Path for OpenViking data; reuses existing db data dir."""
-        if self.openviking_data_dir:
-            return Path(self.openviking_data_dir)
-        return self.sqlite_path().parent / "openviking"
-
-    def resolved_openviking_config_path(self) -> Path:
-        """Resolve OpenViking config path. Defaults to backend/.openviking/ov.conf."""
-        if self.openviking_config_file:
-            return Path(self.openviking_config_file)
-        return _BACKEND_DIR / ".openviking" / "ov.conf"

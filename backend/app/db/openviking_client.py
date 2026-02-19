@@ -1,103 +1,73 @@
-"""OpenViking context DB client with singleton lifecycle and explicit config loading."""
+"""OpenViking context DB client: config from .openviking/ov.conf, data under openviking_data_dir."""
 from __future__ import annotations
 
-import json
+import logging
 import os
 from pathlib import Path
-from threading import Lock
-from typing import Any
+from typing import TYPE_CHECKING
 
 from app.core.config import get_settings
-from app.core.viking_logging import log_viking_client_close, log_viking_client_init
 
-_client = None
-_client_lock = Lock()
+if TYPE_CHECKING:
+    import openviking as ov
+
+logger = logging.getLogger(__name__)
+
+_initialized_client: "ov.SyncOpenViking | None" = None
 
 
 def get_openviking_path() -> Path:
-    """Return OpenViking data directory (same base as SQLite)."""
-    return get_settings().openviking_path()
+    """Return the OpenViking data directory (from settings, referring to .openviking/ov.conf for config)."""
+    return get_settings().openviking_data_dir.resolve()
 
 
-def _load_openviking_config() -> dict[str, Any]:
+def _ensure_config_env() -> None:
+    """Set OPENVIKING_CONFIG_FILE from settings so the openviking library uses .openviking/ov.conf."""
     settings = get_settings()
-    cfg_path = settings.resolved_openviking_config_path()
-    if not cfg_path.exists():
-        raise FileNotFoundError(f"OpenViking config not found: {cfg_path}")
-    with cfg_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    config_path = Path(settings.openviking_config_file).resolve()
+    if config_path.exists():
+        os.environ["OPENVIKING_CONFIG_FILE"] = str(config_path)
+    else:
+        logger.warning("OpenViking config not found at %s; indexing will be skipped.", config_path)
 
 
-def _build_openviking_config(path: Path):
-    from openviking.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
-    from openviking.utils.config.open_viking_config import OpenVikingConfig
-    from openviking.utils.config.storage_config import AGFSConfig, StorageConfig
-    from openviking.utils.config.vlm_config import VLMConfig
-
-    settings = get_settings()
-    raw = _load_openviking_config()
-    dense_raw = ((raw.get("embedding") or {}).get("dense") or {}).copy()
-    if not dense_raw:
-        raise ValueError("OpenViking config missing embedding.dense")
-    vlm_raw = (raw.get("vlm") or {}).copy()
-    if not vlm_raw:
-        raise ValueError("OpenViking config missing vlm")
-
-    return OpenVikingConfig(
-        storage=StorageConfig(
-            agfs=AGFSConfig(
-                path=str(path),
-                port=settings.openviking_agfs_port,
-                url=f"http://localhost:{settings.openviking_agfs_port}",
-            )
-        ),
-        embedding=EmbeddingConfig(dense=EmbeddingModelConfig(**dense_raw)),
-        vlm=VLMConfig(**vlm_raw),
-    )
-
-
-def get_openviking_client():
-    """Return process-wide SyncOpenViking singleton."""
+def get_openviking_client():  # -> ov.SyncOpenViking
+    """Return an initialized SyncOpenViking client. Config from .openviking/ov.conf, data in openviking_data_dir."""
+    global _initialized_client
+    if _initialized_client is not None:
+        return _initialized_client
+    _ensure_config_env()
     import openviking as ov
 
-    global _client
-    if _client is not None:
-        return _client
-
-    with _client_lock:
-        if _client is not None:
-            return _client
-
-        settings = get_settings()
-        cfg_path = settings.resolved_openviking_config_path()
-        os.environ["OPENVIKING_CONFIG_FILE"] = str(cfg_path)
-
-        path = get_openviking_path()
-        path.mkdir(parents=True, exist_ok=True)
-        try:
-            config = _build_openviking_config(path)
-            _client = ov.SyncOpenViking(path=str(path), config=config)
-            log_viking_client_init(success=True)
-            return _client
-        except Exception as e:
-            log_viking_client_init(success=False, error=str(e))
-            raise
+    data_path = get_openviking_path()
+    data_path.mkdir(parents=True, exist_ok=True)
+    client = ov.SyncOpenViking(path=str(data_path))
+    client.initialize()
+    _initialized_client = client
+    return client
 
 
-def close_openviking_client() -> None:
-    """Close singleton client if initialized."""
-    global _client
-    with _client_lock:
-        if _client is None:
-            return
-        try:
-            _client.close()
-            log_viking_client_close()
-        finally:
-            _client = None
-
-
-def openviking_enabled() -> bool:
-    """Whether OpenViking config exists and can be used."""
-    settings = get_settings()
-    return settings.resolved_openviking_config_path().exists()
+def index_document(storage_path: Path, doc_id: str) -> str | None:
+    """
+    Index a document file into OpenViking. Config and data dir come from settings (.openviking/ov.conf).
+    Returns the root_uri (viking://...) on success, None if config missing or indexing fails.
+    """
+    if not Path(get_settings().openviking_config_file).resolve().exists():
+        logger.info("OpenViking config missing; skip indexing for doc %s", doc_id)
+        return None
+    path_str = str(storage_path.resolve())
+    if not storage_path.exists():
+        logger.warning("Document file not found for OpenViking: %s", path_str)
+        return None
+    try:
+        client = get_openviking_client()
+        result = client.add_resource(path=path_str)
+        root_uri = result.get("root_uri")
+        if root_uri:
+            logger.info("OpenViking indexed doc %s -> %s", doc_id, root_uri)
+            return root_uri
+        logger.warning("OpenViking add_resource returned no root_uri for %s", doc_id)
+        return None
+    except Exception as e:
+        logger.exception("OpenViking indexing failed for doc %s: %s", doc_id, e)
+        return None

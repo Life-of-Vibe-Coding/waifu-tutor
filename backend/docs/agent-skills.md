@@ -6,7 +6,7 @@
 
 ## 1. 概述
 
-- **位置**：Agent 技能存放在 `db/data/openviking/viking/agent/skills`，与 memories、instructions 并列。
+- **位置**：Agent 技能存放在项目下的 `skills/` 目录（或 `data/viking/agent/skills` 若使用本地技能树）。
 - **协议**：采用 **Claude Skills 协议**，**扁平存储**：一个技能一个文件，便于按 tag 检索后选择执行。
 - **流程**：根据任务用 `tags` 或 `description` 检索候选技能 → 选出最匹配的一个 → 按该技能的说明执行（或调用对应后端 API）。
 
@@ -161,5 +161,5 @@ tags: [document, ai, flashcards, study, tutor]
 
 ## 5. 后续扩展
 
-- 新增技能时，在 `db/data/openviking/viking/agent/skills` 下新增 `{name}.SKILL.md`，按本文档 §2 的约定编写。
+- 新增技能时，在 `skills/` 下新增 `{name}/SKILL.md`（或对应技能目录），按本文档 §2 的约定编写。
 - 可实现「按 tags 检索 + description 语义检索」的检索层，再按正文执行或映射到后端 API。

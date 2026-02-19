@@ -4,7 +4,6 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core.config import get_settings
-from app.db.openviking_client import get_openviking_client, openviking_enabled
 from app.db.repositories import (
     get_chat_session,
     list_chat_messages,
@@ -24,24 +23,6 @@ def _safe_limit(value: int, default: int) -> int:
         return int(value)
     except Exception:
         return default
-
-
-def _to_plain(value) -> dict:
-    if isinstance(value, dict):
-        return value
-    if hasattr(value, "model_dump"):
-        try:
-            dumped = value.model_dump()
-            if isinstance(dumped, dict):
-                return dumped
-        except Exception:
-            pass
-    if hasattr(value, "__dict__"):
-        try:
-            return {k: v for k, v in vars(value).items() if not str(k).startswith("_")}
-        except Exception:
-            pass
-    return {}
 
 
 @router.get("")
@@ -65,14 +46,5 @@ def commit_session(session_id: str) -> dict:
     if not session:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Session not found"})
 
-    try:
-        if openviking_enabled():
-            ov_session = get_openviking_client().session(session_id=session_id)
-            commit_result = _to_plain(ov_session.commit()) or {"status": "ok"}
-        else:
-            commit_result = {"status": "ok", "message": "OpenViking not configured"}
-    except Exception as e:
-        commit_result = {"status": "failed", "message": str(e)}
-
     mark_chat_session_committed(session_id, _demo_user_id())
-    return {"session_id": session_id, "commit": commit_result}
+    return {"session_id": session_id, "commit": {"status": "ok"}}

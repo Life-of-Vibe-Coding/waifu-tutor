@@ -97,6 +97,11 @@ def _write_chat_log(
     _get_chat_file_logger("file", "chat").info(msg)
 
 
+def log_agent_context_startup(context_text: str) -> None:
+    """Write agent context (tools + skills) to logs/chat/chat.log at startup."""
+    _write_chat_log("AGENT CONTEXT (startup)", "(startup)", context_text or "(empty)")
+
+
 def log_chat_request(
     session_id: str,
     message: str,

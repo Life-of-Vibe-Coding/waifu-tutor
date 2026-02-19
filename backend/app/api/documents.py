@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import get_settings
-from app.db.openviking_client import get_openviking_client, openviking_enabled
+from app.db.openviking_client import index_document as openviking_index_document
 from app.db.repositories import (
     delete_chunks_for_document,
     get_document,
@@ -18,9 +18,7 @@ from app.db.repositories import (
     set_document_subject,
     update_document_status,
 )
-from app.core.viking_logging import log_viking_index_document
 from app.services.document_parser import chunk_text, parse_document
-from app.services.file_search import doc_uri
 
 router = APIRouter()
 
@@ -29,27 +27,6 @@ ALLOWED_EXT = (".pdf", ".docx", ".txt", ".md")
 
 def _demo_user_id() -> str:
     return get_settings().demo_user_id
-
-
-def _index_document_in_openviking(doc_id: str, storage_path: Path, title: str) -> tuple[bool, str | None, str | None]:
-    if not openviking_enabled():
-        return False, "OpenViking not configured", None
-    try:
-        user_id = _demo_user_id()
-        target = doc_uri(user_id, doc_id)
-        client = get_openviking_client()
-        client.add_resource(
-            path=str(storage_path),
-            target=target,
-            reason=f"User uploaded study material: {title}",
-            instruction="Index this study material for OpenViking context file search.",
-            wait=False,
-        )
-        log_viking_index_document(doc_id, str(storage_path), True, openviking_uri=target)
-        return True, None, target
-    except Exception as e:
-        log_viking_index_document(doc_id, str(storage_path), False, error=str(e))
-        return False, str(e), None
 
 
 @router.get("/list")
@@ -134,15 +111,12 @@ async def upload_doc(
             chunk_id = str(uuid.uuid4())
             insert_chunk(chunk_id, doc_id, i, text, None, None)
         word_count = len(raw_text.split())
-        indexed, index_error, ov_uri = _index_document_in_openviking(doc_id, storage_path, title)
-        update_document_status(doc_id, "ready", word_count, openviking_uri=ov_uri)
+        openviking_uri = openviking_index_document(storage_path, doc_id)
+        update_document_status(doc_id, "ready", word_count, openviking_uri=openviking_uri)
         doc = get_document(doc_id, _demo_user_id())
         if doc is not None:
-            doc["openviking_indexed"] = indexed
-            if index_error:
-                doc["openviking_error"] = index_error
             return doc
-        payload = {
+        return {
             "id": doc_id,
             "user_id": _demo_user_id(),
             "subject_id": None,
@@ -156,14 +130,10 @@ async def upload_doc(
             "topic_hint": None,
             "difficulty_estimate": None,
             "storage_path": str(storage_path),
-            "openviking_uri": ov_uri,
+            "openviking_uri": openviking_uri,
             "created_at": "",
             "updated_at": "",
         }
-        payload["openviking_indexed"] = indexed
-        if index_error:
-            payload["openviking_error"] = index_error
-        return payload
     except Exception as e:
         update_document_status(doc_id, "failed")
         raise HTTPException(status_code=500, detail={"code": "processing_failed", "message": str(e)})
