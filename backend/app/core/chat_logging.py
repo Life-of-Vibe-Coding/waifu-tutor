@@ -1,4 +1,4 @@
-"""Structured, readable logging for chat process and skill/tool calling.
+"""Structured, readable logging for chat process and tool calling.
 
 Logs are written to log_dir/chat/chat.log. When chat.log reaches 10 MB it is rotated:
 current file is renamed to chat_yyyy_MM_dd_HH_mm.log and a new chat.log is started.
@@ -98,7 +98,7 @@ def _write_chat_log(
 
 
 def log_agent_context_startup(context_text: str) -> None:
-    """Write agent context (tools + skills) to logs/chat/chat.log at startup."""
+    """Write agent context (tools) to logs/chat/chat.log at startup."""
     _write_chat_log("AGENT CONTEXT (startup)", "(startup)", context_text or "(empty)")
 
 

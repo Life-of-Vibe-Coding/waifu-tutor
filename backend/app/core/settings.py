@@ -1,7 +1,6 @@
 """Application settings from environment."""
 from pathlib import Path
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve .env path relative to backend/ (works regardless of cwd)
@@ -32,15 +31,6 @@ class Settings(BaseSettings):
 
     # Logging: base directory (default: backend/logs). Subdirs: chat/. Set LOG_DIR in .env to override.
     log_dir: Path = Path("logs")
-
-    # OpenViking: config file (embedding + VLM) and data directory. Config defaults to project .openviking/ov.conf.
-    openviking_config_file: Path = _PROJECT_ROOT / ".openviking" / "ov.conf"
-    openviking_data_dir: Path = _PROJECT_ROOT / "db" / "data" / "openviking"
-
-    @field_validator("openviking_config_file", "openviking_data_dir", mode="before")
-    @classmethod
-    def _path_from_str(cls, v: Path | str) -> Path:
-        return Path(v) if isinstance(v, str) else v
 
     def sqlite_path(self) -> Path:
         url = self.database_url.strip()

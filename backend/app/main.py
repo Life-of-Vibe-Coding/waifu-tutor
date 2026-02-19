@@ -13,7 +13,6 @@ from app.core.errors import ChatErrorCode, detail
 from app.core.chat_logging import log_agent_context_startup
 from app.core.text_logging import log_text
 from app.db.session import init_db
-from app.db.skills_sync import sync_skills_into_openviking
 from app.context import load_agent_context, get_agent_context_text
 
 
@@ -21,7 +20,6 @@ from app.context import load_agent_context, get_agent_context_text
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Initialize DB and resources on startup."""
     init_db()
-    sync_skills_into_openviking()
     load_agent_context()
     context_text = get_agent_context_text()
     log_agent_context_startup(context_text)

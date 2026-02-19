@@ -36,8 +36,7 @@ Place Cubism Web sample build in `frontend/public/live2d-demo/`. If missing, a f
 
 ## Next / Roadmap
 
-1. **Integrate OpenViking** — Agentic memories and content retrieval without traditional RAG.
-2. **Enrich study assistant** — Deeper study features and workflows.
-3. **Entertainment features** — Light gamification or fun interactions.
-4. **Emotional system** — Mood/personality similar to Grok Annie.
-5. **Better Live2D and 3D** — Improved modelling and interaction; explore 3D avatars later.
+1. **Enrich study assistant** — Deeper study features and workflows.
+2. **Entertainment features** — Light gamification or fun interactions.
+3. **Emotional system** — Mood/personality similar to Grok Annie.
+4. **Better Live2D and 3D** — Improved modelling and interaction; explore 3D avatars later.

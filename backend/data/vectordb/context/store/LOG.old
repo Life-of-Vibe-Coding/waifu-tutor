@@ -1,0 +1,8 @@
+2026/02/19-22:20:16.642857 0x1f044e0c0 Creating DB data/vectordb/context/store since it was missing.
+2026/02/19-22:20:16.679543 0x1f044e0c0 Delete type=3 #1
+2026/02/19-22:28:52.347856 0x16f37b000 Level-0 table #5: started
+2026/02/19-22:28:52.371770 0x16f37b000 Level-0 table #5: 4215490 bytes OK
+2026/02/19-22:28:52.380901 0x16f37b000 Delete type=0 #3
+2026/02/19-22:40:25.149427 0x16f37b000 Level-0 table #7: started
+2026/02/19-22:40:25.166130 0x16f37b000 Level-0 table #7: 4216179 bytes OK
+2026/02/19-22:40:25.176399 0x16f37b000 Delete type=0 #4

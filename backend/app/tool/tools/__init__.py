@@ -9,9 +9,7 @@ from app.core.chat_logging import log_tool_call
 from . import (
     create_subject,
     get_current_time,
-    get_skill,
     list_recent_uploads,
-    list_skills,
     list_subjects,
     set_break_reminder,
     set_focus_timer,
@@ -24,8 +22,6 @@ _TOOL_MODULES = [
     list_recent_uploads,
     list_subjects,
     create_subject,
-    list_skills,
-    get_skill,
 ]
 
 CHAT_TOOLS: list[dict[str, Any]] = [m.TOOL_SCHEMA for m in _TOOL_MODULES]

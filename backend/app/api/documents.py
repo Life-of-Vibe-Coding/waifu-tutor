@@ -8,7 +8,6 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import get_settings
-from app.db.openviking_client import index_document as openviking_index_document
 from app.db.repositories import (
     delete_chunks_for_document,
     get_document,
@@ -111,8 +110,7 @@ async def upload_doc(
             chunk_id = str(uuid.uuid4())
             insert_chunk(chunk_id, doc_id, i, text, None, None)
         word_count = len(raw_text.split())
-        openviking_uri = openviking_index_document(storage_path, doc_id)
-        update_document_status(doc_id, "ready", word_count, openviking_uri=openviking_uri)
+        update_document_status(doc_id, "ready", word_count, openviking_uri=None)
         doc = get_document(doc_id, _demo_user_id())
         if doc is not None:
             return doc
@@ -130,7 +128,7 @@ async def upload_doc(
             "topic_hint": None,
             "difficulty_estimate": None,
             "storage_path": str(storage_path),
-            "openviking_uri": openviking_uri,
+            "openviking_uri": None,
             "created_at": "",
             "updated_at": "",
         }
