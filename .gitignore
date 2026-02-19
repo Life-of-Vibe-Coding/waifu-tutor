@@ -9,6 +9,7 @@ __pycache__
 backend/.venv
 backend/.pytest_cache
 backend/.openviking
+.openviking/
 backend/data/*.db
 backend/data/uploads/*
 !backend/data/uploads/.gitkeep

@@ -1,0 +1,11 @@
+# Viking
+data/viking/
+
+# uv
+uv.lock
+
+# Logs
+logs/
+
+# Config with secrets
+.openviking/
