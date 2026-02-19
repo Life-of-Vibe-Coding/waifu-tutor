@@ -1,7 +1,7 @@
 plugins:
   localfs:
     config:
-      local_dir: /Users/yifanxu/machine_learning/LoVC/waifu-tutor/backend/data/local
+      local_dir: /Users/yifanxu/machine_learning/LoVC/waifu-tutor/backend/data/viking
     enabled: true
     path: /local
   queuefs:

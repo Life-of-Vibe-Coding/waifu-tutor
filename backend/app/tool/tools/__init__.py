@@ -44,6 +44,7 @@ def execute_tool(
     session_id: str,
     user_id: str,
     user_timezone: str | None = None,
+    loop_context: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
     """Execute a tool by name. Returns (result_string, reminder_payload or None, hitl_payload or None).
     When the tool is request_human_approval, hitl_payload is set and the chat layer must pause.
@@ -53,7 +54,7 @@ def execute_tool(
     except json.JSONDecodeError as e:
         result = json.dumps({"error": f"Invalid arguments: {e}"})
         try:
-            log_tool_call(session_id, name, arguments, result, None)
+            log_tool_call(session_id, name, arguments, result, None, loop_context=loop_context)
         except Exception:
             pass
         return result, None, None
@@ -62,7 +63,7 @@ def execute_tool(
     if module is None:
         result = json.dumps({"error": f"Unknown tool: {name}"})
         try:
-            log_tool_call(session_id, name, args, result, None)
+            log_tool_call(session_id, name, args, result, None, loop_context=loop_context)
         except Exception:
             pass
         return result, None, None
@@ -73,7 +74,14 @@ def execute_tool(
         hitl_payload = {k: v for k, v in break_payload.items() if k != "_hitl"}
         break_payload = None
     try:
-        log_tool_call(session_id, name, args, result if result != HITL_SENTINEL else "(hitl)", break_payload)
+        log_tool_call(
+            session_id,
+            name,
+            args,
+            result if result != HITL_SENTINEL else "(hitl)",
+            break_payload,
+            loop_context=loop_context,
+        )
     except Exception:
         pass
     return result, break_payload, hitl_payload

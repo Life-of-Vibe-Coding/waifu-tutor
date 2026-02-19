@@ -62,15 +62,15 @@ def run_agentic_loop_cli(
     """Run tool loop; on HITL prompt in CLI and continue. Returns (final_reply, hitl_payload or None)."""
     from app.services.ai import complete_with_tools
     from app.tool import CHAT_TOOLS, execute_tool
-    from app.core.chat_logging import log_chat_llm_round
+    from app.core.chat_logging import log_chat_agent_input
 
     empty_round_retries = 0
     for round_index in range(MAX_TOOL_ROUNDS):
-        content, tool_calls, thought = complete_with_tools(messages, CHAT_TOOLS)
         try:
-            log_chat_llm_round(session_id, round_index + 1, messages, content, tool_calls, thought=thought)
+            log_chat_agent_input(session_id, json.dumps(messages, indent=2, ensure_ascii=True))
         except Exception:
             pass
+        content, tool_calls = complete_with_tools(messages, CHAT_TOOLS)
         if content and not tool_calls:
             # Append assistant reply so next turn has full history
             messages.append({"role": "assistant", "content": content})
@@ -82,8 +82,7 @@ def run_agentic_loop_cli(
                     "role": "user",
                     "content": (
                         "You returned an empty response. Continue from the latest context/tool result. "
-                        "Output exactly one <thought>...</thought> block, then either provide tool calls "
-                        "or the final assistant response."
+                        "Or the final assistant response."
                     ),
                 })
                 continue
@@ -92,10 +91,22 @@ def run_agentic_loop_cli(
         assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
         assistant_msg["tool_calls"] = tool_calls
         messages.append(assistant_msg)
-        for tc in tool_calls:
+        for execution_index, tc in enumerate(tool_calls, start=1):
             name = (tc.get("function") or {}).get("name", "")
             args = (tc.get("function") or {}).get("arguments", "{}")
-            result, _br, hitl_payload = execute_tool(name, args, session_id, user_id)
+            result, _br, hitl_payload = execute_tool(
+                name,
+                args,
+                session_id,
+                user_id,
+                loop_context={
+                    "round_index": round_index + 1,
+                    "max_rounds": MAX_TOOL_ROUNDS,
+                    "execution_index": execution_index,
+                    "execution_total": len(tool_calls),
+                    "tool_call_id": tc.get("id", ""),
+                },
+            )
             if hitl_payload:
                 response = prompt_hitl_cli(hitl_payload)
                 if response.get("cancelled"):
@@ -129,8 +140,15 @@ def _messages_to_conversation_history(messages: list[dict[str, Any]], max_items:
 
 def run_chat() -> int:
     """Interactive conversational loop with skills and HITL."""
-    from app.context import get_agent_context_text, load_agent_context
+    from app.context import (
+        append_openviking_text_message,
+        build_openviking_chat_context,
+        get_agent_context_text,
+        load_agent_context,
+        put_openviking_session,
+    )
     from app.core.config import get_settings
+    from app.core.chat_logging import log_chat_agent_input, log_chat_final_response
 
     load_agent_context()
     agent_context = get_agent_context_text()
@@ -138,7 +156,7 @@ def run_chat() -> int:
     user_id = get_settings().demo_user_id
 
     print("Skills CLI (conversational). Say 'quit' or 'exit' to stop.\n")
-    messages: list[dict[str, Any]] = []
+    conversation_history: list[dict[str, str]] = []
 
     while True:
         try:
@@ -147,30 +165,62 @@ def run_chat() -> int:
             break
         if not line or line.lower() in ("quit", "exit", "q"):
             break
-        # Build user message with context on first turn, then just the new line
-        thought_instruction = (
-            " Before your reply or any tool call, output a single <thought>...</thought> block "
-            "describing: 1) current state (what you know, what the user wants), 2) why you are choosing this step."
-        )
-        if not messages:
-            user_content = f"{agent_context}\n\nUser: {line}{thought_instruction}"
-        else:
-            user_content = f"User: {line}{thought_instruction}"
-        messages.append({"role": "user", "content": user_content})
 
+        context_texts, ov_session = build_openviking_chat_context(
+            session_id=session_id,
+            user_id=user_id,
+            user_message=line,
+            history=conversation_history,
+            doc_id=None,
+            attachment_title=None,
+            attachment_uri=None,
+        )
+        put_openviking_session(ov_session)
+
+        context_block = "\n\n".join(context_texts[:14])
+        system_content = (
+            f"Context:\n{context_block}\n\n"
+            "Instructions:\n"
+            "Reply in character: accurate, helpful, concise, and encouraging. Use tools when appropriate."
+        )
+        if agent_context:
+            system_content = f"{agent_context}\n\n{system_content}"
+        try:
+            log_chat_agent_input(session_id, system_content)
+        except Exception:
+            pass
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": line},
+        ]
         reply, hitl = run_agentic_loop_cli(messages, session_id, user_id)
         if hitl:
             print("[HITL not resolved in loop – this should not happen]\n")
             continue
         if reply:
+            conversation_history.append({"role": "user", "content": line})
+            conversation_history.append({"role": "assistant", "content": reply})
+            append_openviking_text_message(session_id, "assistant", reply)
+            try:
+                log_chat_final_response(session_id, reply, False, None)
+            except Exception:
+                pass
             print(f"\nAssistant: {reply}\n")
         else:
             from app.services.ai import chat as ai_chat
             # Pass recent conversation so fallback knows context (e.g. essay outline approved, need paragraphs)
             fallback_history = _messages_to_conversation_history(messages)
-            reply, _ = ai_chat(line, [], None, conversation_history=fallback_history)
+            reply, _ = ai_chat(line, context_texts, None, conversation_history=fallback_history or conversation_history)
             if not (reply or "").strip():
                 reply = "I'm sorry, I couldn't complete that. Please try again."
+            conversation_history.append({"role": "user", "content": line})
+            conversation_history.append({"role": "assistant", "content": reply})
+            append_openviking_text_message(session_id, "assistant", reply)
+            try:
+                log_chat_final_response(session_id, reply, True, None)
+            except Exception:
+                pass
             print(f"\nAssistant: {reply}\n")
 
     print("Bye.")

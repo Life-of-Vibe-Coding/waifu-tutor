@@ -139,13 +139,25 @@ def log_chat_context(
     if (context_texts or [])[8:]:
         ctx_preview += f"\n  ... and {len(context_texts) - 8} more blocks"
     payload = f"""
+  === CONTEXT SUMMARY BEGIN ===
   attachment_title: {attachment_title}
   persona_preview: {persona_preview or ''}
 
   context_blocks:
 {ctx_preview or '  (none)'}
+  === CONTEXT SUMMARY END ===
 """
-    _write_chat_log("CHAT CONTEXT", session_id, payload)
+    _write_chat_log("CHAT CONTEXT SUMMARY", session_id, payload)
+
+
+def log_chat_agent_input(session_id: str, prompt_text: str) -> None:
+    """Log the full prompt/context sent to the agent for this turn."""
+    payload = f"""
+  === AGENT INPUT BEGIN ===
+{_truncate_for_log(prompt_text or '')}
+  === AGENT INPUT END ===
+"""
+    _write_chat_log("CHAT AGENT INPUT (FULL)", session_id, payload)
 
 
 # Max characters to log per message role to avoid huge log files (None = no truncation)
@@ -170,9 +182,8 @@ def log_chat_llm_round(
     messages_sent: list[dict[str, Any]],
     content: str | None,
     tool_calls: list[dict[str, Any]] | None,
-    thought: str | None = None,
 ) -> None:
-    """Log one LLM round: thought (ReAct), chat history, and response (content + tool_calls)."""
+    """Log one LLM round: chat history and response (content + tool_calls)."""
     # Build full chat history for this round: system prompt, user prompt, agent prompt, tool results
     history_lines = []
     for i, m in enumerate(messages_sent):
@@ -192,9 +203,9 @@ def log_chat_llm_round(
     chat_history_block = "\n".join(history_lines)
 
     out_lines = []
-    if thought:
-        out_lines.append(f"  thought (ReAct):\n{_truncate_for_log(thought)}")
-    out_lines.append(f"  content: {_truncate_for_log(content or '') or '(none)'}")
+    if content:
+        out_lines.append("  content:")
+        out_lines.append(_truncate_for_log(content))
     if tool_calls:
         out_lines.append(f"  tool_calls: {len(tool_calls)}")
         for j, tc in enumerate(tool_calls):
@@ -235,11 +246,32 @@ def log_tool_call(
     arguments: str | dict[str, Any],
     result: str,
     reminder_payload: dict[str, Any] | None,
+    loop_context: dict[str, Any] | None = None,
 ) -> None:
     """Log a single tool invocation: name, arguments, result, and optional reminder."""
     args_str = arguments if isinstance(arguments, str) else _pretty_json(arguments)
+    loop_lines: list[str] = []
+    if isinstance(loop_context, dict):
+        round_index = loop_context.get("round_index")
+        max_rounds = loop_context.get("max_rounds")
+        execution_index = loop_context.get("execution_index")
+        execution_total = loop_context.get("execution_total")
+        tool_call_id = loop_context.get("tool_call_id")
+        if round_index is not None and max_rounds is not None:
+            loop_lines.append(f"  loop_round: {round_index}/{max_rounds}")
+        elif round_index is not None:
+            loop_lines.append(f"  loop_round: {round_index}")
+        if execution_index is not None and execution_total is not None:
+            loop_lines.append(f"  loop_execution: {execution_index}/{execution_total}")
+        elif execution_index is not None:
+            loop_lines.append(f"  loop_execution: {execution_index}")
+        if tool_call_id:
+            loop_lines.append(f"  tool_call_id: {tool_call_id}")
+    loop_prefix = "\n".join(loop_lines)
+    if loop_prefix:
+        loop_prefix += "\n"
     payload = f"""
-  tool: {tool_name}
+{loop_prefix}  tool: {tool_name}
   arguments:
 {args_str}
 

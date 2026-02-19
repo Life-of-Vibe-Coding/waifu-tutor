@@ -9,7 +9,7 @@ The backend supports:
 - Session-aware chat (`session_id` across requests)
 - Context for chat: **document chunks** from SQLite (no external context DB)
 - Search trajectory output (`search_trace`) for observability/debug when `debug_search_trace=true`
-- Session commit: marks session as committed in SQLite (no external session store)
+- Session commit in SQLite and OpenViking in-memory lifecycle commit
 
 Core modules:
 
@@ -54,6 +54,7 @@ For each completed exchange, the same exchange is persisted to SQLite (`chat_mes
 `POST /api/sessions/{session_id}/commit`:
 
 - Marks SQLite `chat_sessions.committed_at` for the session.
+- Commits OpenViking session state for the same `session_id` (hydrates from stored messages if needed).
 
 ## File Search (Context)
 
@@ -98,6 +99,7 @@ When `debug_search_trace=true` in the request body, the response includes `searc
 - `GET /api/sessions` — list sessions from SQLite
 - `GET /api/sessions/{session_id}` — session metadata + messages
 - `POST /api/sessions/{session_id}/commit` — set SQLite `committed_at`
+  - Also returns OpenViking commit metadata in `commit.openviking`.
 
 ## Frontend Integration
 

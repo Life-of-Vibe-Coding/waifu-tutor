@@ -28,12 +28,19 @@ from app.db.repositories import (
 from app.services.ai import chat as ai_chat, complete_with_tools, mood_from_text
 from app.core.chat_logging import (
     log_chat_context,
+    log_chat_agent_input,
     log_chat_final_response,
     log_chat_llm_round,
     log_chat_request,
 )
 from app.tool import CHAT_TOOLS, execute_tool
-from app.context import get_agent_context_text
+from app.context import (
+    append_openviking_text_message,
+    build_openviking_chat_context,
+    get_agent_context_text,
+    put_openviking_session,
+    record_openviking_session_usage,
+)
 from app.hitl import set_pending, consume_pending
 
 logger = logging.getLogger(__name__)
@@ -43,6 +50,8 @@ MAX_TOOL_ROUNDS = 20
 # Retries for empty assistant turns (no content and no tool calls) before surfacing recovery text.
 MAX_EMPTY_RESPONSE_RETRIES = 4
 router = APIRouter()
+
+_LOOP_OBJECTIVE_MARKER = "[loop_main_objective]"
 
 
 class ChatBody(BaseModel):
@@ -105,11 +114,51 @@ def _save_exchange(session_id: str, user_msg: str, assistant_msg: str) -> None:
     insert_chat_message(str(uuid.uuid4()), session_id=session_id, user_id=user_id, role="assistant", content=assistant_msg)
 
 
-def _resolve_attachment_title(doc_id: str | None) -> str | None:
+def _resolve_attachment(doc_id: str | None) -> tuple[str | None, str | None]:
     if not doc_id:
-        return None
+        return None, None
     doc = get_document(doc_id, _demo_user_id())
-    return doc.get("title") if doc else None
+    if not doc:
+        return None, None
+    return doc.get("title"), doc.get("openviking_uri")
+
+
+def _extract_main_objective(messages: list[dict[str, Any]]) -> str:
+    """Extract the latest user objective from the tool-loop messages."""
+    for m in reversed(messages or []):
+        if m.get("role") != "user":
+            continue
+        content = str(m.get("content") or "").strip()
+        if not content:
+            continue
+        marker = "User question:\n"
+        if marker in content:
+            tail = content.split(marker, 1)[1]
+            objective = tail.split("\n\n", 1)[0].strip()
+            if objective:
+                return objective
+        return content
+    return ""
+
+
+def _ensure_loop_objective_context(messages: list[dict[str, Any]]) -> None:
+    """Pin one system instruction so tool-loop rounds stay aligned to one objective."""
+    for m in messages:
+        if m.get("role") == "system" and _LOOP_OBJECTIVE_MARKER in str(m.get("content") or ""):
+            return
+    objective = _extract_main_objective(messages) or "Complete the latest user request."
+    messages.insert(
+        0,
+        {
+            "role": "system",
+            "content": (
+                f"{_LOOP_OBJECTIVE_MARKER}\n"
+                f"Main objective: {objective}\n"
+                "During tool/skill execution, keep outputs internal and continue until the final user-ready response is complete. "
+                "Do not return intermediate artifacts (for example: only outline, only plan, only partial draft) unless the user explicitly asks for intermediate output only."
+            ),
+        },
+    )
 
 
 
@@ -123,12 +172,13 @@ def _run_tool_loop(
     """Run agentic tool loop. Returns (reply_text or None, used_fallback, reminder_payload, hitl_payload).
     When hitl_payload is set, reply_text is None and the chat layer must pause and surface the checkpoint.
     """
+    _ensure_loop_objective_context(messages)
     reminder_payload: dict[str, Any] | None = None
     empty_round_retries = 0
     for round_index in range(MAX_TOOL_ROUNDS):
-        content, tool_calls, thought = complete_with_tools(messages, CHAT_TOOLS)
+        content, tool_calls = complete_with_tools(messages, CHAT_TOOLS)
         try:
-            log_chat_llm_round(session_id, round_index + 1, messages, content, tool_calls, thought=thought)
+            log_chat_llm_round(session_id, round_index + 1, messages, content, tool_calls)
         except Exception:
             pass
         if content and not tool_calls:
@@ -138,7 +188,7 @@ def _run_tool_loop(
                 pass
             return content, False, reminder_payload, None
         if not tool_calls:
-            # Some model responses contain only <thought> (stripped) and no tool call.
+            # Some model responses are empty and contain no tool call.
             # Give the model a short retry nudge before falling back.
             if not (content or "").strip() and empty_round_retries < MAX_EMPTY_RESPONSE_RETRIES:
                 empty_round_retries += 1
@@ -146,14 +196,13 @@ def _run_tool_loop(
                 # switching to a generic fallback completion that lacks tool-loop context.
                 if empty_round_retries < MAX_EMPTY_RESPONSE_RETRIES:
                     retry_instruction = (
-                        "You returned an empty response. Continue from the latest context/tool result. "
-                        "Output exactly one <thought>...</thought> block, then either provide tool calls "
-                        "or the final assistant response."
+                        "You returned an empty response. Continue from the latest tool result while staying focused on the same main objective. "
+                        "Either provide tool calls or the final assistant response."
                     )
                 else:
                     retry_instruction = (
-                        "You repeatedly returned an empty response. Continue from the latest context/tool result "
-                        "and provide the final assistant response in this turn. Do not leave content empty."
+                        "You repeatedly returned an empty response. Continue from the latest tool result and provide the final assistant response "
+                        "for the same main objective in this turn. Do not leave content empty."
                     )
                 messages.append({
                     "role": "user",
@@ -175,10 +224,39 @@ def _run_tool_loop(
         assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
         assistant_msg["tool_calls"] = tool_calls
         messages.append(assistant_msg)
-        for tc in tool_calls:
+        for execution_index, tc in enumerate(tool_calls, start=1):
             name = (tc.get("function") or {}).get("name", "")
             args = (tc.get("function") or {}).get("arguments", "{}")
-            result, br, hitl_payload = execute_tool(name, args, session_id, user_id, user_timezone=user_timezone)
+            result, br, hitl_payload = execute_tool(
+                name,
+                args,
+                session_id,
+                user_id,
+                user_timezone=user_timezone,
+                loop_context={
+                    "round_index": round_index + 1,
+                    "max_rounds": MAX_TOOL_ROUNDS,
+                    "execution_index": execution_index,
+                    "execution_total": len(tool_calls),
+                    "tool_call_id": tc.get("id", ""),
+                },
+            )
+            success = True
+            try:
+                parsed_result = json.loads(result)
+                if isinstance(parsed_result, dict) and parsed_result.get("error"):
+                    success = False
+            except Exception:
+                success = True
+            record_openviking_session_usage(
+                session_id,
+                skill={
+                    "uri": f"viking://agent/skills/{name}" if name else "",
+                    "input": args if isinstance(args, str) else json.dumps(args),
+                    "output": result,
+                    "success": success,
+                },
+            )
             if hitl_payload:
                 checkpoint_id = set_pending(
                     session_id=session_id,
@@ -218,13 +296,14 @@ def _complete_chat(
     context_block = "\n\n".join(context_texts[:14])
     user_content = (
         f"Context:\n{context_block}\n\nUser question:\n{msg}\n\n"
-        "Reply in character: accurate, helpful, concise, and encouraging. Use tools when appropriate.\n\n"
-        "Before your reply or any tool call, output a single <thought>...</thought> block (one or a few sentences) "
-        "describing: 1) current state (what you know, what the user wants), 2) why you are choosing this step "
-        "(e.g. answering directly, or calling which tool and why). Then give your actual reply or tool calls."
+        "Reply in character: accurate, helpful, concise, and encouraging. Use tools when appropriate."
     )
     if agent_context:
         user_content = f"{agent_context}\n\n{user_content}"
+    try:
+        log_chat_agent_input(session_id, user_content)
+    except Exception:
+        pass
     messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
     text, used_fallback, reminder_payload, hitl_payload = _run_tool_loop(messages, session_id, user_id, user_timezone)
     if hitl_payload is not None:
@@ -244,40 +323,18 @@ def _complete_chat(
 
 
 def _run_chat(body: ChatBody, user_timezone: str | None = None) -> dict[str, Any]:
-    msg = (body.message or "").strip()
-    if not msg:
-        raise_chat_validation(400, ChatErrorCode.MESSAGE_REQUIRED, "Please enter a message.")
-    if len(msg) > CHAT_MESSAGE_MAX_LENGTH:
-        raise_chat_validation(
-            400,
-            ChatErrorCode.MESSAGE_TOO_LONG,
-            f"Message is too long (max {CHAT_MESSAGE_MAX_LENGTH:,} characters).",
-        )
-
-    history = _normalize_history(body.history)
-    if len(history) > CHAT_HISTORY_MAX_ITEMS:
-        raise_chat_validation(
-            400,
-            ChatErrorCode.HISTORY_TOO_LONG,
-            f"Too many messages in history (max {CHAT_HISTORY_MAX_ITEMS}). Start a new chat.",
-        )
+    session_id, _first_time, msg, context_texts, attachment_title, effective_history, _ov_session = _build_chat_context(body)
     try:
         log_chat_request(
-            body.session_id or "(new)",
+            session_id,
             msg,
-            len(history),
+            len(effective_history),
             body.doc_id,
             body.debug_search_trace,
         )
     except Exception:
         pass
-    session_id = body.session_id or str(uuid.uuid4())
     user_id = _demo_user_id()
-    upsert_chat_session(session_id, user_id=user_id, title=msg[:80])
-
-    context_texts: list[str] = []
-    effective_history = history
-    attachment_title = _resolve_attachment_title(body.doc_id)
 
     try:
         log_chat_context(session_id, context_texts, attachment_title, "")
@@ -293,6 +350,7 @@ def _run_chat(body: ChatBody, user_timezone: str | None = None) -> dict[str, Any
             "session_id": session_id,
         }
     mood = mood_from_text(text or "")
+    append_openviking_text_message(session_id, "assistant", text or "")
     _save_exchange(session_id, msg, text or "")
 
     response: dict[str, Any] = {
@@ -384,6 +442,7 @@ def hitl_response(request: Request, body: HitlResponseBody) -> dict[str, Any]:
         pass
     mood = mood_from_text(text)
     # Persist final assistant message (user side already has the checkpoint; we don't re-save user msg)
+    append_openviking_text_message(session_id, "assistant", text)
     insert_chat_message(
         str(uuid.uuid4()), session_id, user_id, role="assistant", content=text,
     )
@@ -398,8 +457,10 @@ def hitl_response(request: Request, body: HitlResponseBody) -> dict[str, Any]:
     return out
 
 
-def _build_chat_context(body: ChatBody) -> tuple[str, bool, str, list[str], str | None, list[dict[str, str]]]:
-    """Build context and return (session_id, first_time, msg, context_texts, attachment_title, history)."""
+def _build_chat_context(
+    body: ChatBody,
+) -> tuple[str, bool, str, list[str], str | None, list[dict[str, str]], Any]:
+    """Build context and return (session_id, first_time, msg, context_texts, attachment_title, history, ov_session)."""
     msg = (body.message or "").strip()
     if not msg:
         raise_chat_validation(400, ChatErrorCode.MESSAGE_REQUIRED, "Please enter a message.")
@@ -421,9 +482,18 @@ def _build_chat_context(body: ChatBody) -> tuple[str, bool, str, list[str], str 
     user_id = _demo_user_id()
     upsert_chat_session(session_id, user_id=user_id, title=msg[:80])
 
-    context_texts: list[str] = []
-    attachment_title = _resolve_attachment_title(body.doc_id)
-    return session_id, False, msg, context_texts, attachment_title, history
+    attachment_title, attachment_uri = _resolve_attachment(body.doc_id)
+    context_texts, _ov_session = build_openviking_chat_context(
+        session_id=session_id,
+        user_id=user_id,
+        user_message=msg,
+        history=history,
+        doc_id=body.doc_id,
+        attachment_title=attachment_title,
+        attachment_uri=attachment_uri,
+    )
+    put_openviking_session(_ov_session)
+    return session_id, False, msg, context_texts, attachment_title, history, _ov_session
 
 
 @router.post("/chat/stream")
@@ -434,7 +504,7 @@ def chat_stream(request: Request, body: ChatBody) -> StreamingResponse:
         stream_id = str(uuid.uuid4())
         fallback_message = "I'm here! Something went wrong on my side—please try again."
         try:
-            session_id, first_time, msg, context_texts, attachment_title, effective_history = _build_chat_context(body)
+            session_id, first_time, msg, context_texts, attachment_title, effective_history, _ov_session = _build_chat_context(body)
             try:
                 log_chat_request(body.session_id or "(new)", msg, len(body.history or []), body.doc_id, body.debug_search_trace)
                 log_chat_context(session_id, context_texts, attachment_title, "")
@@ -453,6 +523,7 @@ def chat_stream(request: Request, body: ChatBody) -> StreamingResponse:
             if not (text or "").strip():
                 text = fallback_message
             mood = mood_from_text(text or "")
+            append_openviking_text_message(session_id, "assistant", text or "")
             _save_exchange(session_id, msg, text or "")
         except Exception as e:
             logger.exception("Chat stream error: %s", e)

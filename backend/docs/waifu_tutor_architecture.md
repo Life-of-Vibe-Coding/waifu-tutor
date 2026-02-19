@@ -103,7 +103,7 @@ DELETE /api/reminders/{reminder_id}
 **DocumentService**
 - Parse uploaded documents (PDF, DOCX, TXT, MD)
 - Extract and clean text content
-- Chunk documents for vector storage
+- Chunk documents for retrieval context
 - Generate metadata (word count, topics, difficulty estimate)
 
 **AIService**
@@ -116,15 +116,9 @@ DELETE /api/reminders/{reminder_id}
 - Response streaming for chat
 - Token usage tracking
 
-**VectorService (Qdrant)**
-- Document embedding generation
-- Semantic search for relevant content
-- Context retrieval for RAG-enhanced responses
-- Collection management per user/course
-
-**SearchService (BM25 + SQLite)**
+**SearchService**
 - Keyword-based search implementation
-- Hybrid search combining vector + keyword results
+- OpenViking-managed semantic retrieval
 - Full-text search index maintenance
 
 **ReminderService**
@@ -138,7 +132,7 @@ DELETE /api/reminders/{reminder_id}
 Document Upload → Text Extraction → Chunking → 
   ↓
 Parallel Processing:
-  ├─ Embedding Generation → Qdrant Storage
+  ├─ OpenViking-managed retrieval indexing
   ├─ Keyword Indexing → SQLite FTS
   └─ AI Summary Generation → Cache in SQLite
 ```
@@ -147,22 +141,12 @@ Parallel Processing:
 
 ### 3. Database Layer
 
-#### Qdrant (Vector Database)
+#### OpenViking Retrieval Layer
 
-**Collections Structure**
-```
-Collection: user_{user_id}_documents
-- Vectors: Document embeddings (1536 dimensions for text-embedding-004)
-- Payload: {
-    doc_id, chunk_text, chunk_index,
-    metadata: {title, page, section, timestamp}
-  }
-```
-
-**Operations**
-- Semantic search with filtering
-- Similarity threshold tuning
-- Periodic re-indexing for updated documents
+**Responsibilities**
+- Embedding generation and semantic indexing
+- Context retrieval for agent/chat workflows
+- Internal index and storage lifecycle management
 
 #### SQLite (Relational + FTS)
 
@@ -224,7 +208,7 @@ Collection: user_{user_id}_documents
 - FastAPI (Python 3.11+)
 - Pydantic for data validation
 - SQLAlchemy for SQLite ORM
-- Qdrant Client SDK
+- OpenViking SDK
 - Google Generative AI SDK (Gemini)
 - python-docx, PyPDF2 for document parsing
 - APScheduler for reminder scheduling
@@ -238,7 +222,7 @@ Collection: user_{user_id}_documents
 ```
 Frontend: Vite dev server (localhost:5173)
 Backend: Uvicorn (localhost:8000)
-Qdrant: local (localhost:6333)
+OpenViking: local service + managed storage
 SQLite: Local file
 ```
 
@@ -246,7 +230,7 @@ SQLite: Local file
 ```
 Frontend: Vercel/Netlify CDN
 Backend: Railway/Fly.io/AWS EC2
-Qdrant: Qdrant Cloud or self-hosted
+OpenViking: managed retrieval and indexing
 SQLite: Attached volume or migrate to PostgreSQL
 ```
 
@@ -270,9 +254,9 @@ SQLite: Attached volume or migrate to PostgreSQL
 ```
 1. User asks question in chat
 2. Frontend sends to AI chat endpoint with context
-3. Backend performs hybrid search:
+3. Backend performs retrieval:
    - BM25 keyword search in SQLite FTS
-   - Semantic search in Qdrant
+   - Semantic retrieval via OpenViking
 4. Top K results combined and ranked
 5. Context + question sent to Gemini
 6. Streaming response returned
@@ -301,7 +285,6 @@ SQLite: Attached volume or migrate to PostgreSQL
 - Async task queue: Celery for document processing
 - CDN for static assets and Live2D models
 - Database migration path: SQLite → PostgreSQL for concurrent writes
-- Vector database sharding by user cohorts
 
 ---
 

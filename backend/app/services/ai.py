@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 import httpx
@@ -10,21 +9,6 @@ import httpx
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
-
-# ReAct-style thought block: extract <thought>...</thought> from model content
-_THOUGHT_PATTERN = re.compile(r"<thought>\s*(.*?)\s*</thought>", re.DOTALL | re.IGNORECASE)
-
-
-def parse_thought(content: str | None) -> tuple[str | None, str | None]:
-    """Extract <thought>...</thought> from content. Returns (content_without_thought, thought_text)."""
-    if not (content or "").strip():
-        return content, None
-    match = _THOUGHT_PATTERN.search(content)
-    if not match:
-        return content, None
-    thought = match.group(1).strip() or None
-    rest = (_THOUGHT_PATTERN.sub("", content, count=1)).strip() or None
-    return rest, thought
 
 
 def _volcengine_complete(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
@@ -59,8 +43,7 @@ def _volcengine_complete(messages: list[dict[str, Any]], tools: list[dict[str, A
                 return None
             data = r.json()
             msg = (data.get("choices") or [{}])[0].get("message", {})
-            raw_content = (msg.get("content") or "").strip() or None
-            content_stripped, thought = parse_thought(raw_content)
+            content = (msg.get("content") or "").strip() or None
             raw_tool_calls = msg.get("tool_calls")
             tool_calls = None
             if raw_tool_calls:
@@ -76,9 +59,8 @@ def _volcengine_complete(messages: list[dict[str, Any]], tools: list[dict[str, A
                     for tc in raw_tool_calls
                 ]
             return {
-                "content": content_stripped,
+                "content": content,
                 "tool_calls": tool_calls,
-                "thought": thought,
             }
     except Exception as e:
         logger.warning("Chat fallback: Volcengine request failed: %s", e, exc_info=True)
@@ -131,12 +113,12 @@ def chat(
 def complete_with_tools(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
-) -> tuple[str | None, list[dict[str, Any]] | None, str | None]:
-    """Call Volcengine with tools. Returns (content, tool_calls, thought). Content has <thought> stripped."""
+) -> tuple[str | None, list[dict[str, Any]] | None]:
+    """Call Volcengine with tools. Returns (content, tool_calls)."""
     out = _volcengine_complete(messages, tools=tools)
     if not out:
-        return None, None, None
-    return out.get("content"), out.get("tool_calls"), out.get("thought")
+        return None, None
+    return out.get("content"), out.get("tool_calls")
 
 
 def mood_from_text(text: str) -> str:

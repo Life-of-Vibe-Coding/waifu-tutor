@@ -18,6 +18,12 @@ Before diving in, two key distinctions:
 
 The registry reads only YAML frontmatter at startup. Full skill and subskill content is loaded on demand — only when the model decides it's needed. This keeps token costs low and lets subskills stay invisible until the parent delegates to them.
 
+**Core execution model**
+
+1. **One full round has full context.** A skill is executed within one continuous round of execution: tools, subskills, and human-in-the-loop. Within this round, the agent has all the context it needs to complete the skill. HITL pause/resume is part of that same round — the loop resumes with the same `messages`; it does not start a new round.
+
+2. **Exit after completion.** When the skill completes (final assistant content, no tool calls), the loop exits. The next user message starts a fresh `messages` list and a new tool loop. The previous turn’s tool trace is not carried forward — we exit the skill execution context.
+
 ---
 
 ## Phase 1: Startup — The Registry
@@ -189,3 +195,25 @@ Agentic loop
 ```
 
 Subskills are loaded exactly when needed. Humans are consulted exactly when the stakes warrant it. Neither happens more than necessary.
+
+---
+
+## Context Persistence and Subskill Execution
+
+When a task requires **multiple subskill checks** (e.g. load parent → read subskill A → HITL → read subskill B), context persistence and correct execution behave as follows.
+
+### Within one chat run / tool loop: **yes**
+
+The same `messages` list is reused across rounds. `_run_tool_loop` appends each assistant turn (including `tool_calls`) and each `tool` result to `messages`, then passes that list to the next API call. So multiple subskill reads and tool rounds chain in a single execution without losing context (`backend/app/api/chat.py`, loop around lines 127–201).
+
+### Across HITL pause / resume: **yes**
+
+When the model calls `request_human_approval`, the handler stores the full loop state (including `messages`, `tool_call_id`, `session_id`, `user_id`) via `set_pending` (`backend/app/hitl/store.py`). On `POST /api/ai/chat/hitl-response`, the backend loads that state with `consume_pending`, appends the user’s synthetic tool result to the stored `messages`, and calls `_run_tool_loop` again. Execution resumes from the exact point where it paused (`backend/app/api/chat.py`, ~182–192 for store, ~343–369 for resume).
+
+### Across separate user turns: **limited**
+
+Persisted chat storage (and the history the client sends on the next request) contains only **user and assistant text messages**, not the internal tool trace. Each new user message starts a fresh `messages` list built from the current prompt and the client-provided `history`; the previous turn’s tool-call chain is not replayed. So on a later user turn, the model may need to re-read the top-level skill or subskills to continue correctly (`backend/app/api/chat.py`, e.g. `_complete_chat` building `messages` from a single user content block and `_messages_to_conversation_history` stripping tool messages for fallback).
+
+### Correct execution of subskills: **prompt-guided, not enforced**
+
+The system instructs the model (via `get_agent_context_text`) to load the top-level skill then subskills via `read_file` and not to fabricate subskill outputs or skip checkpoints. There is **no server-side orchestrator** that validates that every required subskill step was actually performed. Long-horizon correctness across turns therefore depends on model behavior unless you add explicit step/state enforcement (`backend/app/context/context_builder.py`, line 53).
