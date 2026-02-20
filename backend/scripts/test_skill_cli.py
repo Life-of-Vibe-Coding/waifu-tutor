@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI test for the skill registry and load_skill/read_file tools.
+"""CLI test for the skill registry and load_skill/load_subskill tools.
 
 Usage (from backend directory):
   uv run python scripts/test_skill_cli.py --chat          # conversational (default)
@@ -60,17 +60,24 @@ def run_agentic_loop_cli(
     user_id: str,
 ) -> tuple[str | None, dict[str, Any] | None]:
     """Run tool loop; on HITL prompt in CLI and continue. Returns (final_reply, hitl_payload or None)."""
+    from app.api.chat import (
+        _ensure_loop_objective_context,
+        _ensure_skill_execution_context,
+        _extract_skill_content_from_load_skill_result,
+        _tools_for_messages,
+    )
     from app.services.ai import complete_with_tools
-    from app.tool import CHAT_TOOLS, execute_tool
+    from app.tool import execute_tool
     from app.core.chat_logging import log_chat_agent_input
 
+    _ensure_loop_objective_context(messages)
     empty_round_retries = 0
     for round_index in range(MAX_TOOL_ROUNDS):
         try:
             log_chat_agent_input(session_id, json.dumps(messages, indent=2, ensure_ascii=True))
         except Exception:
             pass
-        content, tool_calls = complete_with_tools(messages, CHAT_TOOLS)
+        content, tool_calls = complete_with_tools(messages, _tools_for_messages(messages))
         if content and not tool_calls:
             # Append assistant reply so next turn has full history
             messages.append({"role": "assistant", "content": content})
@@ -119,6 +126,11 @@ def run_agentic_loop_cli(
                         "free_input": response.get("free_input"),
                     })
             messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": result})
+            if name == "load_skill":
+                extracted = _extract_skill_content_from_load_skill_result(result)
+                if extracted:
+                    skill_content, skill_name = extracted
+                    _ensure_skill_execution_context(messages, skill_content, skill_name)
     return None, None
 
 
@@ -252,7 +264,7 @@ def main() -> int:
     args = parser.parse_args()
 
     from app.skills.registry import build_skill_registry, get_skill_registry, get_skills_root
-    from app.tool.tools import load_skill, read_file
+    from app.tool.tools import load_skill, load_subskill
 
     root = get_skills_root()
     build_skill_registry(root)
@@ -288,8 +300,8 @@ def main() -> int:
         print(f"  ... ({len(lines) - 20} more)")
 
     if args.subskill:
-        print(f"\n--- read_file({args.subskill!r}) ---")
-        result2, _ = read_file.run({"path": args.subskill}, "cli-session", "cli-user")
+        print(f"\n--- load_subskill({args.subskill!r}) ---")
+        result2, _ = load_subskill.run({"path": args.subskill}, "cli-session", "cli-user")
         data2 = json.loads(result2)
         if "error" in data2:
             print(f"Error: {data2['error']}")

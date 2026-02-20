@@ -52,7 +52,10 @@ def get_agent_context_text() -> str:
         )
     if not parts:
         return ""
-    return "\n\n".join(parts) + "\n\nUse the skill registry to choose a skill, then call load_skill before executing. Load subskills via read_file when the parent skill says so. Call request_human_approval before consequential actions or after significant outputs; do not fabricate subskill outputs or skip checkpoints."
+    return (
+        "\n\n".join(parts)
+        + "\n\nTo run a skill, call load_skill first. You will receive full instructions after loading."
+    )
 
 
 def get_agent_context() -> dict[str, Any]:

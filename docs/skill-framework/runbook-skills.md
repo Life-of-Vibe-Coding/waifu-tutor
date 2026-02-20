@@ -17,7 +17,7 @@
    ...
    ```
 
-3. **Subskills** (optional): Add subfolders under the skill, e.g. `my-skill/phase-a/phase-a.md`. The model loads them on demand via the `read_file` tool when the parent skill’s instructions say so. Do not register subskills in the registry.
+3. **Subskills** (optional): Add subfolders under the skill, e.g. `my-skill/phase-a/phase-a.md`. The model loads them on demand via the `load_subskill` tool when the parent skill’s instructions say so. Do not register subskills in the registry.
 
 4. **Restart** the backend (or rely on startup) so `build_skill_registry()` rescans and injects the new skill into the agent context.
 
@@ -61,5 +61,5 @@ uv run python scripts/test_skill_cli.py --skill exam-mode-tuner --subskill exam-
 
 ## Safety
 
-- **read_file**: Only paths under the skills root are allowed; `..` and absolute paths are rejected.
+- **load_subskill**: Only paths under the skills root are allowed; `..` and absolute paths are rejected.
 - **Registry**: Missing or malformed frontmatter is skipped with a warning; startup does not fail.

@@ -12,7 +12,7 @@ from . import (
     list_recent_uploads,
     list_subjects,
     load_skill,
-    read_file,
+    load_subskill,
     request_human_approval,
     set_break_reminder,
     set_focus_timer,
@@ -26,7 +26,7 @@ _TOOL_MODULES = [
     list_subjects,
     create_subject,
     load_skill,
-    read_file,
+    load_subskill,
     request_human_approval,
 ]
 

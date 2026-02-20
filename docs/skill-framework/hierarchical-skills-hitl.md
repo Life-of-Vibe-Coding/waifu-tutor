@@ -10,7 +10,7 @@ Before diving in, two key distinctions:
 
 | Layer | Examples | What it is | Where it lives |
 |---|---|---|---|
-| **Tools** | `load_skill`, `read_file` | Low-level verbs — fixed capabilities baked into the agent | `agent.py` |
+| **Tools** | `load_skill`, `load_subskill` | Low-level verbs — fixed capabilities baked into the agent | `agent.py` |
 | **Skills** | `exam-mode-tuner` | High-level recipe — orchestrates subskills for a complete task | `skills/*/SKILL.md` |
 | **Subskills** | `question-generation`, `adaptive-difficulty` | Focused sub-recipes — handle one phase of the parent skill | `skills/*/subskill/*.md` |
 
@@ -64,7 +64,7 @@ while True:
           │
           ├── stop_reason == "tool_use"
           │       ├── load_skill    → read parent SKILL.md
-          │       ├── read_file     → read subskill .md
+          │       ├── load_subskill → read subskill .md
           │       ├── <other tools> → dispatch to handler
           │       └── append tool_result → loop again
           │
@@ -82,22 +82,22 @@ HITL checkpoints are not a separate stop reason in the raw API — they are a co
 
 ## Phase 4: Subskill Loading — Progressive Delegation
 
-When the parent skill's instructions say *"call → question-generation"*, the model issues a `read_file` tool call for the subskill's markdown file. It does not load subskills eagerly — it reads them one at a time, exactly when the workflow reaches that phase.
+When the parent skill's instructions say *"call → question-generation"*, the model issues a `load_subskill` tool call for the subskill's markdown file. It does not load subskills eagerly — it reads them one at a time, exactly when the workflow reaches that phase.
 
 ```
 Round 1  →  load_skill("exam-mode-tuner")
-                Parent skill loaded. Model reads step list.
+                Parent skill loaded. Pipeline enters skill execution mode; system prompt displays SKILL.md.
 
-Round 2  →  read_file("question-generation/question-generation.md")
+Round 2  →  load_subskill("question-generation/question-generation.md")
                 Subskill loaded. Model generates question plan.
 
 [HITL checkpoint — see below]
 
 Round 3  →  <exam runs per-question loop>
-                read_file("adaptive-difficulty/adaptive-difficulty.md")  ← per answer
+                load_subskill("adaptive-difficulty/adaptive-difficulty.md")  ← per answer
                     Subskill loaded. Model adjusts difficulty.
 
-Round 4  →  read_file("performance-analytics/performance-analytics.md")
+Round 4  →  load_subskill("performance-analytics/performance-analytics.md")
                 Subskill loaded. Model produces report.
 
 [HITL checkpoint — see below]
@@ -105,7 +105,7 @@ Round 4  →  read_file("performance-analytics/performance-analytics.md")
 Round 5  →  stop_reason == "end_turn"  ✓ EXIT
 ```
 
-Each `read_file` call for a subskill follows the same tool round-trip as any other tool call — the result is appended to `messages` as a `tool_result`, and the loop continues. The model never has all subskills in context simultaneously unless it explicitly loads them; it only carries what it has needed so far.
+Each `load_subskill` call for a subskill follows the same tool round-trip as any other tool call — the result is appended to `messages` as a `tool_result`, and the loop continues. The model never has all subskills in context simultaneously unless it explicitly loads them; it only carries what it has needed so far.
 
 ---
 
@@ -137,7 +137,7 @@ After loading the parent skill and deriving exam parameters, but before generati
 The loop **pauses**. The handler surfaces this to the user as a structured prompt. Possible responses:
 
 - **Approved** → `tool_result` returns `{ "approved": true }` → loop continues into question generation.
-- **Modified** → user says "make it 15 questions, no essays" → `tool_result` returns `{ "approved": true, "overrides": { "question_count": 15, "types": ["choice", "fill_blank"] } }` → model incorporates changes before loading the subskill.
+- **Modified** → user says "make it 15 questions, no essays" → `tool_result` returns `{ "approved": true, "overrides": { "question_count": 15, "types": ["choice", "fill_blank"] } }` → model incorporates changes before calling load_subskill.
 - **Cancelled** → loop aborts cleanly.
 
 ### Checkpoint Type B — Output Review (After)
@@ -184,12 +184,12 @@ User message
 └── Model matches intent → decides to load parent skill
 
 Agentic loop
-├── [R1] load_skill("exam-mode-tuner")            ← parent instructions in context
+├── [R1] load_skill("exam-mode-tuner")            ← skill execution pipeline entered; system prompt displays SKILL.md
 ├── [HITL-A] request_human_approval(exam_params)  ← pause; user confirms or edits
-├── [R2] read_file("question-generation/...")     ← subskill loaded on demand
+├── [R2] load_subskill("question-generation/...") ← subskill loaded on demand
 ├── [R3–Rn] per-answer loop
-│       └── read_file("adaptive-difficulty/...")  ← subskill re-read each iteration
-├── [Rn+1] read_file("performance-analytics/...") ← subskill loaded after exam ends
+│       └── load_subskill("adaptive-difficulty/...")  ← subskill re-read each iteration
+├── [Rn+1] load_subskill("performance-analytics/...") ← subskill loaded after exam ends
 ├── [HITL-B] request_human_approval(post_routing) ← pause; user picks next step
 └── end_turn → return final output to user
 ```
@@ -216,4 +216,4 @@ Persisted chat storage (and the history the client sends on the next request) co
 
 ### Correct execution of subskills: **prompt-guided, not enforced**
 
-The system instructs the model (via `get_agent_context_text`) to load the top-level skill then subskills via `read_file` and not to fabricate subskill outputs or skip checkpoints. There is **no server-side orchestrator** that validates that every required subskill step was actually performed. Long-horizon correctness across turns therefore depends on model behavior unless you add explicit step/state enforcement (`backend/app/context/context_builder.py`, line 53).
+When `load_skill` succeeds, the backend injects a system prompt that displays the full SKILL.md content and enforces the use of `load_subskill` when the skill directs to a subskill. The model must not fabricate subskill outputs or skip checkpoints. There is **no server-side orchestrator** that validates that every required subskill step was actually performed. Long-horizon correctness across turns therefore depends on model behavior unless you add explicit step/state enforcement (`backend/app/api/chat.py`, `_ensure_skill_execution_context`).

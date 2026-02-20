@@ -1,4 +1,4 @@
-"""Tests for skill registry and read_file path safety."""
+"""Tests for skill registry and load_subskill path safety."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +9,7 @@ from app.skills.registry import build_skill_registry, get_skill_registry, _parse
 
 
 def _safe_resolve(root: Path, path_str: str) -> Path | None:
-    """Same logic as read_file._safe_resolve: resolve under root, reject .. and absolute."""
+    """Same logic as load_subskill._safe_resolve: resolve under root, reject .. and absolute."""
     path_str = (path_str or "").strip().replace("\\", "/")
     if not path_str or path_str.startswith("/") or ".." in path_str.split("/"):
         return None

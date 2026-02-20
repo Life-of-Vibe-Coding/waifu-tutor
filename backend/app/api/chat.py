@@ -52,6 +52,15 @@ MAX_EMPTY_RESPONSE_RETRIES = 4
 router = APIRouter()
 
 _LOOP_OBJECTIVE_MARKER = "[loop_main_objective]"
+_SKILL_EXECUTION_MARKER = "[skill_execution_mode]"
+
+
+def _tools_for_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return tools list; exclude load_skill when already in skill execution mode."""
+    for m in messages or []:
+        if m.get("role") == "system" and _SKILL_EXECUTION_MARKER in str(m.get("content") or ""):
+            return [t for t in CHAT_TOOLS if (t.get("function") or {}).get("name") != "load_skill"]
+    return CHAT_TOOLS
 
 
 class ChatBody(BaseModel):
@@ -161,6 +170,107 @@ def _ensure_loop_objective_context(messages: list[dict[str, Any]]) -> None:
     )
 
 
+def _extract_skill_content_from_load_skill_result(result: str) -> tuple[str, str] | None:
+    """If result is a successful load_skill response, return (content, name)."""
+    try:
+        data = json.loads(result)
+        if not isinstance(data, dict) or data.get("error"):
+            return None
+        content = data.get("content")
+        name = data.get("name", "")
+        if content and isinstance(content, str):
+            return (content, name)
+    except Exception:
+        pass
+    return None
+
+
+def _format_skill_execution_system(
+    skill_content: str, skill_name: str, objective: str = ""
+) -> str:
+    """Build merged system prompt: loop objective + skill execution instructions."""
+    obj = objective or "Complete the user request."
+    skill_block = (
+        f"Executing the following skill: {skill_name}\n"
+        f"{skill_content}\n\n"
+        "You MUST call load_subskill(path) when the skill directs you to a subskill before proceeding to the next step. "
+        "Do not skip subskills or fabricate their outputs. "
+        "Call request_human_approval before consequential actions or after significant outputs when the skill or situation warrants it."
+    )
+    return (
+        f"{_SKILL_EXECUTION_MARKER}\n"
+        f"Main objective: {obj}\n"
+        "During tool/skill execution, keep outputs internal and continue until the final user-ready response is complete. "
+        "Do not return intermediate artifacts (for example: only outline, only plan, only partial draft) unless the user explicitly asks for intermediate output only.\n\n"
+        f"You are in skill execution mode. The active skill instructions are:\n\n{skill_block}"
+    )
+
+
+def _ensure_skill_execution_context(
+    messages: list[dict[str, Any]], skill_content: str, skill_name: str = ""
+) -> None:
+    """Inject or update merged system message (objective + skill content + load_subskill enforcement)."""
+    objective = _extract_main_objective(messages) or "Complete the user request."
+    content = _format_skill_execution_system(skill_content, skill_name, objective)
+    merged = {"role": "system", "content": content}
+    i = 0
+    replaced = False
+    while i < len(messages):
+        m = messages[i]
+        if m.get("role") == "system" and (
+            _SKILL_EXECUTION_MARKER in str(m.get("content") or "")
+            or _LOOP_OBJECTIVE_MARKER in str(m.get("content") or "")
+        ):
+            if not replaced:
+                m["content"] = content
+                replaced = True
+                i += 1
+            else:
+                messages.pop(i)
+            continue
+        i += 1
+    if not replaced:
+        messages.insert(0, merged)
+    _trim_messages_for_skill_execution(messages)
+
+
+def _trim_messages_for_skill_execution(messages: list[dict[str, Any]]) -> None:
+    """During skill execution, remove main system prompt, load_skill assistant+tool (redundant), and normalize user."""
+    objective = _extract_main_objective(messages)
+    if not objective:
+        objective = "Complete the user request."
+    # Remove system messages that contain the main agent context (tools, registry, instructions)
+    i = 0
+    while i < len(messages):
+        m = messages[i]
+        if m.get("role") != "system":
+            i += 1
+            continue
+        content = str(m.get("content") or "")
+        if "Available tools" in content and (
+            _LOOP_OBJECTIVE_MARKER not in content and _SKILL_EXECUTION_MARKER not in content
+        ):
+            messages.pop(i)
+            continue
+        i += 1
+    # Remove the assistant+tool pair for load_skill (skill content is already in system)
+    while len(messages) >= 2:
+        last = messages[-1]
+        prev = messages[-2]
+        if last.get("role") == "tool" and prev.get("role") == "assistant":
+            tcs = prev.get("tool_calls") or []
+            if len(tcs) == 1 and (tcs[0].get("function") or {}).get("name") == "load_skill":
+                messages.pop()
+                messages.pop()
+                continue
+        break
+    # Replace first user message content with just the last user message
+    for m in messages:
+        if m.get("role") == "user":
+            m["content"] = objective
+            break
+
+
 
 
 def _run_tool_loop(
@@ -176,7 +286,7 @@ def _run_tool_loop(
     reminder_payload: dict[str, Any] | None = None
     empty_round_retries = 0
     for round_index in range(MAX_TOOL_ROUNDS):
-        content, tool_calls = complete_with_tools(messages, CHAT_TOOLS)
+        content, tool_calls = complete_with_tools(messages, _tools_for_messages(messages))
         try:
             log_chat_llm_round(session_id, round_index + 1, messages, content, tool_calls)
         except Exception:
@@ -276,6 +386,11 @@ def _run_tool_loop(
                 "tool_call_id": tc.get("id", ""),
                 "content": result,
             })
+            if name == "load_skill":
+                extracted = _extract_skill_content_from_load_skill_result(result)
+                if extracted:
+                    skill_content, skill_name = extracted
+                    _ensure_skill_execution_context(messages, skill_content, skill_name)
     # Loop ended without final content (e.g. API returned no content and no tool_calls): signal fallback
     return None, True, reminder_payload, None
 

@@ -1,4 +1,4 @@
-"""Read a file under the skills root (e.g. subskill markdown). Path must be relative and inside skills root."""
+"""Load a subskill by path (relative to skills root)."""
 from __future__ import annotations
 
 import json
@@ -7,27 +7,9 @@ from typing import Any
 
 from app.skills.registry import get_skills_root
 
-TOOL_SCHEMA: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "read_file",
-        "description": "Read a file under the skills directory. Use for subskills (e.g. exam-mode-tuner/question-generation/question-generation.md). Path is relative to the skills root; no parent (..) or absolute paths.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Relative path from skills root, e.g. exam-mode-tuner/question-generation/question-generation.md",
-                },
-            },
-            "required": ["path"],
-        },
-    },
-}
-
 
 def _safe_resolve(root: Path, path_str: str) -> Path | None:
-    """Resolve path_str under root. Return None if outside root or invalid."""
+    """Resolve path under root; reject .. and absolute paths."""
     path_str = (path_str or "").strip().replace("\\", "/")
     if not path_str or path_str.startswith("/") or ".." in path_str.split("/"):
         return None
@@ -45,6 +27,25 @@ def _safe_resolve(root: Path, path_str: str) -> Path | None:
         return None
 
 
+TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "load_subskill",
+        "description": "Load a subskill by path when the parent skill directs you to one. Call this before proceeding when the skill says to delegate to a subskill (e.g. 'call → question-generation'). Path is relative to the skills root (e.g. exam-mode-tuner/question-generation/question-generation.md). Returns the subskill markdown content.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative path to subskill markdown under skills root (e.g. exam-mode-tuner/question-generation/question-generation.md).",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+
 def run(
     args: dict[str, Any],
     session_id: str,
@@ -57,9 +58,9 @@ def run(
         return json.dumps({"error": "Missing path"}), None
     resolved = _safe_resolve(root, path_str)
     if resolved is None:
-        return json.dumps({"error": "Invalid or disallowed path"}), None
+        return json.dumps({"error": "Invalid or unsafe path"}), None
     if not resolved.is_file():
-        return json.dumps({"error": f"File not found: {path_str}"}), None
+        return json.dumps({"error": f"Subskill not found: {path_str}"}), None
     try:
         content = resolved.read_text(encoding="utf-8", errors="replace")
         return json.dumps({"content": content, "path": path_str}), None

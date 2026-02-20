@@ -8,7 +8,7 @@ def test_run_tool_loop_returns_recovery_after_repeated_empty_turns(monkeypatch):
 
     def fake_complete_with_tools(messages, tools):
         calls["n"] += 1
-        return None, None, "thinking"
+        return None, None
 
     monkeypatch.setattr(chat_api, "complete_with_tools", fake_complete_with_tools)
 

@@ -37,8 +37,8 @@ flowchart TB
 - This is the tool-call subloop and can iterate for multiple rounds.
 
 3. Skill and subskill usage via tools:
-- For top-level skills, the model calls `load_skill(name)`.
-- For subskills, it calls `read_file(path)` under the configured skills root.
+- For top-level skills, the model calls `load_skill(name)`. On success, the backend enters the skill execution pipeline and injects a system prompt with the full SKILL.md content.
+- For subskills, the model calls `load_subskill(path)` under the configured skills root when the skill directs it.
 - The loop does not have a separate Python skill engine; the model orchestrates steps by reading skill markdown and calling tools accordingly.
 
 4. Empty-turn resilience:
@@ -62,6 +62,6 @@ flowchart TB
 - `backend/app/api/chat.py`
 - `backend/app/tool/tools/__init__.py`
 - `backend/app/tool/tools/load_skill.py`
-- `backend/app/tool/tools/read_file.py`
+- `backend/app/tool/tools/load_subskill.py`
 - `backend/app/tool/tools/request_human_approval.py`
 - `backend/app/hitl/store.py`
