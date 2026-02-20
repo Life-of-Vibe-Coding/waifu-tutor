@@ -25,7 +25,7 @@ description: Create study outlines and guides from documents or topics; extract 
 
 ### 2. Knowledge Extraction and Structure → `knowledge-extraction`
 
-Call subskill `→ knowledge-extraction/knowledge-extraction.md` to:
+Call load_subskill with path `study-guide-creator/knowledge-extraction/knowledge-extraction.md`, then follow its steps to:
 - Extract concept nodes from the document
 - Identify hierarchy (chapter → topic → subtopic → term)
 - Label cognitive level (Bloom: remember / understand / apply / analyze / evaluate / create)
@@ -34,7 +34,7 @@ Call subskill `→ knowledge-extraction/knowledge-extraction.md` to:
 
 ### 3. Prerequisite Map → `prerequisite-mapping`
 
-Call subskill `→ prerequisite-mapping/prerequisite-mapping.md` to:
+Call load_subskill with path `study-guide-creator/prerequisite-mapping/prerequisite-mapping.md`, then follow its steps to:
 - Map prerequisite relations (A before B)
 - Find concepts that can be learned in parallel
 - Detect and break cycles
@@ -76,7 +76,7 @@ For each module:
 ### 6. Time Planning → `time-allocation`
 
 If user gives `time_budget` or `exam_date`:
-- Call subskill `→ time-allocation/time-allocation.md` to:
+- Call load_subskill with path `study-guide-creator/time-allocation/time-allocation.md`, then follow its steps to:
   - Allocate time by module weight (importance × difficulty)
   - Produce daily/weekly plan
   - Insert review points (spaced repetition)
@@ -116,11 +116,11 @@ Present the guide in structured Markdown and suggest 2–3 next actions:
 
 ## Subskill References
 
-| Subskill | Path | When to call |
+| Subskill | Path (relative to skills root) | When to call |
 |---|---|---|
-| knowledge-extraction | `./knowledge-extraction/knowledge-extraction.md` | Step 2: Extract concept structure from document/topic |
-| prerequisite-mapping | `./prerequisite-mapping/prerequisite-mapping.md` | Step 3: Build concept dependencies |
-| time-allocation | `./time-allocation/time-allocation.md` | Step 6: Allocate time to modules |
+| knowledge-extraction | `study-guide-creator/knowledge-extraction/knowledge-extraction.md` | Step 2: Extract concept structure from document/topic |
+| prerequisite-mapping | `study-guide-creator/prerequisite-mapping/prerequisite-mapping.md` | Step 3: Build concept dependencies |
+| time-allocation | `study-guide-creator/time-allocation/time-allocation.md` | Step 6: Allocate time to modules |
 
 ## External Skill Linkage
 

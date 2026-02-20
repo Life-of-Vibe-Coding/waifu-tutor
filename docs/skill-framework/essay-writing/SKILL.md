@@ -25,9 +25,11 @@ description: Guides the user to produce a structured essay (introduction, N body
 
 Confirm with the user if the topic is ambiguous or if key choices (stance, audience, number of body paragraphs) are missing.
 
+**HITL checkpoint (before outline):** Call `request_human_approval` with a summary of the chosen topic, body_count, audience, length, and style. Include these in `params` so the user can approve or modify before you generate the outline.
+
 ### 2. Build Outline → `outline-builder`
 
-Call subskill `→ outline-builder/outline-builder.md` with **body_count** = N (from step 1). It will:
+Call load_subskill with path `essay-writing/outline-builder/outline-builder.md`, then follow its Steps with **body_count** = N (from step 1). It will:
 
 - Produce a **thesis statement** (one or two sentences) that states the main claim or purpose.
 - Produce an **(N+2)-part outline**:
@@ -37,9 +39,13 @@ Call subskill `→ outline-builder/outline-builder.md` with **body_count** = N (
 
 Ensure the outline is coherent and each body paragraph clearly supports the thesis.
 
+**Transition (reflect, then continue):** The outline is an intermediate artifact — the full essay is not yet complete. Do NOT return the outline as the final response. Next: call `request_human_approval` for the HITL checkpoint, then call `load_subskill(essay-writing/paragraph-generator/paragraph-generator.md)` for Step 3.
+
+**HITL checkpoint (after outline):** Call `request_human_approval` to present the thesis and outline to the user. In the summary, offer to proceed with the full essay or let them revise the outline. Do not proceed to paragraph generation until the user approves.
+
 ### 3. Generate Paragraph 1 (Introduction) → `paragraph-generator`
 
-Call subskill `→ paragraph-generator/paragraph-generator.md` with:
+Call load_subskill with path `essay-writing/paragraph-generator/paragraph-generator.md`, then follow its Steps with:
 
 - **role**: `introduction`
 - **thesis**: From outline.
@@ -51,7 +57,7 @@ Output: full introduction paragraph.
 
 ### 4. Generate Body Paragraphs → `paragraph-generator`
 
-For each body paragraph i = 1 … N, call `→ paragraph-generator` with:
+For each body paragraph i = 1 … N, use the paragraph-generator subskill (same path as step 3) with:
 
 - **role**: `body`
 - **paragraph_index**: i (1-based index among body paragraphs).
@@ -64,7 +70,7 @@ Output: N body paragraphs, each with topic sentence, support, and analysis.
 
 ### 5. Generate Conclusion → `paragraph-generator`
 
-Call `→ paragraph-generator` with:
+Use the paragraph-generator subskill (same path as step 3) with:
 
 - **role**: `conclusion`
 - **thesis**: From outline.
@@ -85,7 +91,7 @@ Output: full conclusion paragraph.
 If the user asks to revise, shorten, or expand:
 
 - Identify which paragraph(s) to change.
-- Re-call `→ paragraph-generator` with updated outline_point or length; replace only those paragraphs and re-assemble.
+- Re-use the paragraph-generator subskill with updated outline_point or length; replace only those paragraphs and re-assemble.
 
 ## Input
 
@@ -107,10 +113,10 @@ If the user asks to revise, shorten, or expand:
 
 ## Subskill References
 
-| Subskill | Path | When to call |
-|----------|------|--------------|
-| outline-builder | `./outline-builder/outline-builder.md` | Step 2: Create thesis and outline with body_count = N |
-| paragraph-generator | `./paragraph-generator/paragraph-generator.md` | Steps 3–5: Generate intro, then each of the N body paragraphs, then conclusion |
+| Subskill | Path (relative to skills root) | When to call |
+|----------|-------------------------------|--------------|
+| outline-builder | `essay-writing/outline-builder/outline-builder.md` | Step 2: Create thesis and outline with body_count = N |
+| paragraph-generator | `essay-writing/paragraph-generator/paragraph-generator.md` | Steps 3–5: Generate intro, then each of the N body paragraphs, then conclusion |
 
 ## External Skill Linkage
 
@@ -134,7 +140,9 @@ If the user asks to revise, shorten, or expand:
 **Agent**:
 
 1. Confirm topic (recycling importance), body_count = 4, stance (e.g., "recycling matters" — for), audience and length (standard).
-2. Call `→ outline-builder` with body_count = 4: thesis + outline (intro; body 1–4: e.g., environment, economy, habit, policy; conclusion).
-3. Call `→ paragraph-generator` for intro → then body 1, 2, 3, 4 → then conclusion.
-4. Assemble and show the full essay (6 paragraphs total) with paragraph labels or spacing.
-5. Offer one short revision tip if relevant.
+2. Call `request_human_approval` with summary of params (topic, body_count=4, audience, length). Wait for user to approve.
+3. Call load_subskill(`essay-writing/outline-builder/outline-builder.md`) and follow its steps with body_count = 4: thesis + outline (intro; body 1–4: e.g., environment, economy, habit, policy; conclusion).
+4. Call `request_human_approval` to present the outline. Wait for user to approve before writing paragraphs.
+5. Call load_subskill(`essay-writing/paragraph-generator/paragraph-generator.md`) and follow its steps for intro → then body 1, 2, 3, 4 → then conclusion.
+6. Assemble and show the full essay (6 paragraphs total) with paragraph labels or spacing.
+7. Offer one short revision tip if relevant.

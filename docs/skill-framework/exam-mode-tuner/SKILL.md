@@ -33,7 +33,7 @@ description: Runs adaptive practice exams with grading and analytics. Use when t
 
 ### 2. Question Generation → `question-generation`
 
-Call subskill `→ question-generation/question-generation.md` to:
+Call load_subskill with path `exam-mode-tuner/question-generation/question-generation.md`, then follow its steps to:
 - Generate questions distributed across Bloom levels
 - Ensure concept coverage ≥ 80% (core concepts must appear)
 - Attach metadata per question: concept, Bloom level, estimated difficulty, estimated time
@@ -82,14 +82,14 @@ Call subskill `→ question-generation/question-generation.md` to:
 
 ### 5. Adaptive Difficulty → `adaptive-difficulty`
 
-Call subskill `→ adaptive-difficulty/adaptive-difficulty.md` to:
+Call load_subskill with path `exam-mode-tuner/adaptive-difficulty/adaptive-difficulty.md`, then follow its steps to:
 - Track accuracy and speed in real time
 - Adjust Bloom level and difficulty of later questions
 - Keep questions in the "zone of proximal development": slightly above current level
 
 ### 6. Post-Exam Analysis → `performance-analytics`
 
-Call subskill `→ performance-analytics/performance-analytics.md` to:
+Call load_subskill with path `exam-mode-tuner/performance-analytics/performance-analytics.md`, then follow its steps to:
 - Produce multi-dimensional report
 - Identify weak concepts and error patterns
 - Compare to past tests if available
@@ -129,11 +129,11 @@ From `performance-analytics`, recommend:
 
 ## Subskill References
 
-| Subskill | Path | When to call |
+| Subskill | Path (relative to skills root) | When to call |
 |---|---|---|
-| question-generation | `./question-generation/question-generation.md` | Step 2: Generate questions |
-| adaptive-difficulty | `./adaptive-difficulty/adaptive-difficulty.md` | Step 5: Adjust difficulty in real time |
-| performance-analytics | `./performance-analytics/performance-analytics.md` | Step 6: Post-exam report |
+| question-generation | `exam-mode-tuner/question-generation/question-generation.md` | Step 2: Generate questions |
+| adaptive-difficulty | `exam-mode-tuner/adaptive-difficulty/adaptive-difficulty.md` | Step 5: Adjust difficulty in real time |
+| performance-analytics | `exam-mode-tuner/performance-analytics/performance-analytics.md` | Step 6: Post-exam report |
 
 ## External Skill Linkage
 

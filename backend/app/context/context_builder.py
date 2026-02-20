@@ -2,60 +2,37 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
-from app.tool.tools import CHAT_TOOLS
-from app.skills import build_skill_registry, get_skill_registry
 from app.context.openviking_types import ContextPart, Part, SessionLike, TextPart
 from app.context.session_store import ensure_openviking_session
 
 logger = logging.getLogger(__name__)
 
-_CACHED_TOOLS: list[dict[str, str]] = []
-
 
 def load_agent_context() -> None:
-    """Load tools and skill registry. Call at application startup."""
-    global _CACHED_TOOLS
-    _CACHED_TOOLS = []
-    for t in CHAT_TOOLS:
-        fn = (t.get("function") or {}) if isinstance(t, dict) else {}
-        name = fn.get("name", "")
-        desc = fn.get("description", "")
-        if name:
-            _CACHED_TOOLS.append({"name": name, "description": desc})
-    try:
-        from app.core.config import get_settings
-        skills_root = Path(get_settings().skills_dir)
-    except Exception:
-        skills_root = Path(__file__).resolve().parent.parent.parent / "docs" / "skill-framework"
-    build_skill_registry(skills_root)
-    logger.info("Agent context loaded: %d tool(s), %d skill(s)", len(_CACHED_TOOLS), len(get_skill_registry()))
+    """Load tools and skill registry via agent harness. Call at application startup."""
+    from app.agent import get_default_agent
+    from app.skills import get_skill_registry
+
+    agent = get_default_agent()
+    tools = agent.get_cached_tools()
+    skill_count = len(get_skill_registry())
+    logger.info("Agent context loaded: %d tool(s), %d skill(s)", len(tools), skill_count)
 
 
 def get_cached_tools() -> list[dict[str, str]]:
     """Return cached tool name/description list. Empty if load_agent_context() not yet called."""
-    return list(_CACHED_TOOLS)
+    from app.agent import get_default_agent
+
+    return list(get_default_agent().get_cached_tools())
 
 
 def get_agent_context_text() -> str:
     """Format cached tools and skill registry for system/user prompt."""
-    parts = []
-    if _CACHED_TOOLS:
-        parts.append("Available tools:\n" + "\n".join(f"- {t['name']}: {t['description']}" for t in _CACHED_TOOLS))
-    registry = get_skill_registry()
-    if registry:
-        parts.append(
-            "Available top-level skills (load with load_skill before executing):\n"
-            + "\n".join(f"- {s['name']}: {s['description']}" for s in registry)
-        )
-    if not parts:
-        return ""
-    return (
-        "\n\n".join(parts)
-        + "\n\nTo run a skill, call load_skill first. You will receive full instructions after loading."
-    )
+    from app.agent import get_default_agent
+
+    return get_default_agent().get_agent_context_text()
 
 
 def get_agent_context() -> dict[str, Any]:

@@ -152,9 +152,10 @@ def log_chat_context(
 
 def log_chat_agent_input(session_id: str, prompt_text: str) -> None:
     """Log the full prompt/context sent to the agent for this turn."""
+    redacted = _redact_internal_instructions(prompt_text or "")
     payload = f"""
   === AGENT INPUT BEGIN ===
-{_truncate_for_log(prompt_text or '')}
+{_truncate_for_log(redacted)}
   === AGENT INPUT END ===
 """
     _write_chat_log("CHAT AGENT INPUT (FULL)", session_id, payload)
@@ -174,6 +175,24 @@ def _truncate_for_log(text: str, max_chars: int = _CHAT_HISTORY_LOG_MAX_CHARS) -
     else:
         cut = text[:max_chars]
     return cut + "\n... [truncated]"
+
+
+def _redact_internal_instructions(text: str) -> str:
+    """Remove internal instruction lines from logged content to reduce noise."""
+    if not text or not isinstance(text, str):
+        return text or ""
+    lines = text.split("\n")
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("Main objective:"):
+            continue
+        if "During tool/skill execution, keep outputs internal" in line:
+            continue
+        if "Do not return intermediate artifacts" in line and "unless the user explicitly asks" in line:
+            continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def log_chat_llm_round(
@@ -198,7 +217,8 @@ def log_chat_llm_round(
                 fn = t.get("function") or {}
                 history_lines.append(f"    [{j}] id={t.get('id', '')} name={fn.get('name', '')} args={fn.get('arguments', '{}')}")
         if msg_content:
-            history_lines.append(_truncate_for_log(msg_content))
+            redacted = _redact_internal_instructions(msg_content)
+            history_lines.append(_truncate_for_log(redacted))
         history_lines.append("")
     chat_history_block = "\n".join(history_lines)
 

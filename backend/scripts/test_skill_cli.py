@@ -20,8 +20,6 @@ _BACKEND = Path(__file__).resolve().parent.parent
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-MAX_TOOL_ROUNDS = 20
-
 
 def prompt_hitl_cli(hitl: dict[str, Any]) -> dict[str, Any]:
     """Prompt user in terminal for HITL response. Returns dict for tool result."""
@@ -59,79 +57,29 @@ def run_agentic_loop_cli(
     session_id: str,
     user_id: str,
 ) -> tuple[str | None, dict[str, Any] | None]:
-    """Run tool loop; on HITL prompt in CLI and continue. Returns (final_reply, hitl_payload or None)."""
-    from app.api.chat import (
-        _ensure_loop_objective_context,
-        _ensure_skill_execution_context,
-        _extract_skill_content_from_load_skill_result,
-        _tools_for_messages,
-    )
-    from app.services.ai import complete_with_tools
-    from app.tool import execute_tool
-    from app.core.chat_logging import log_chat_agent_input
+    """Run tool loop via harness; on HITL prompt in CLI and continue. Returns (final_reply, hitl_payload or None)."""
+    from app.agent import get_default_agent
 
-    _ensure_loop_objective_context(messages)
-    empty_round_retries = 0
-    for round_index in range(MAX_TOOL_ROUNDS):
-        try:
-            log_chat_agent_input(session_id, json.dumps(messages, indent=2, ensure_ascii=True))
-        except Exception:
-            pass
-        content, tool_calls = complete_with_tools(messages, _tools_for_messages(messages))
-        if content and not tool_calls:
-            # Append assistant reply so next turn has full history
-            messages.append({"role": "assistant", "content": content})
-            return content, None
-        if not tool_calls:
-            if not (content or "").strip() and empty_round_retries < 2:
-                empty_round_retries += 1
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "You returned an empty response. Continue from the latest context/tool result. "
-                        "Or the final assistant response."
-                    ),
-                })
-                continue
-            break
-        empty_round_retries = 0
-        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
-        assistant_msg["tool_calls"] = tool_calls
-        messages.append(assistant_msg)
-        for execution_index, tc in enumerate(tool_calls, start=1):
-            name = (tc.get("function") or {}).get("name", "")
-            args = (tc.get("function") or {}).get("arguments", "{}")
-            result, _br, hitl_payload = execute_tool(
-                name,
-                args,
-                session_id,
-                user_id,
-                loop_context={
-                    "round_index": round_index + 1,
-                    "max_rounds": MAX_TOOL_ROUNDS,
-                    "execution_index": execution_index,
-                    "execution_total": len(tool_calls),
-                    "tool_call_id": tc.get("id", ""),
-                },
-            )
-            if hitl_payload:
-                response = prompt_hitl_cli(hitl_payload)
-                if response.get("cancelled"):
-                    result = json.dumps({"approved": False, "cancelled": True})
-                else:
-                    result = json.dumps({
-                        "approved": True,
-                        "overrides": response.get("overrides"),
-                        "selected": response.get("selected"),
-                        "free_input": response.get("free_input"),
-                    })
-            messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": result})
-            if name == "load_skill":
-                extracted = _extract_skill_content_from_load_skill_result(result)
-                if extracted:
-                    skill_content, skill_name = extracted
-                    _ensure_skill_execution_context(messages, skill_content, skill_name)
-    return None, None
+    harness = get_default_agent()
+    while True:
+        reply, used_fallback, reminder, hitl_payload = harness.run(
+            messages, session_id, user_id, user_timezone=None
+        )
+        if hitl_payload is None:
+            return reply, None
+        # HITL: prompt user, append tool result, and resume
+        response = prompt_hitl_cli(hitl_payload)
+        tool_call_id = hitl_payload.get("tool_call_id", "")
+        if response.get("cancelled"):
+            result = json.dumps({"approved": False, "cancelled": True})
+        else:
+            result = json.dumps({
+                "approved": True,
+                "overrides": response.get("overrides"),
+                "selected": response.get("selected"),
+                "free_input": response.get("free_input"),
+            })
+        messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": result})
 
 
 def _messages_to_conversation_history(messages: list[dict[str, Any]], max_items: int = 12, max_content_len: int = 1500) -> list[dict[str, str]]:

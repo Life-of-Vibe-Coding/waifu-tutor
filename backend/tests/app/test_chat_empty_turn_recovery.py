@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from app.api import chat as chat_api
 
+# Default max_empty_response_retries from agent config
+MAX_EMPTY_RESPONSE_RETRIES = 4
+
 
 def test_run_tool_loop_returns_recovery_after_repeated_empty_turns(monkeypatch):
     calls = {"n": 0}
@@ -10,7 +13,8 @@ def test_run_tool_loop_returns_recovery_after_repeated_empty_turns(monkeypatch):
         calls["n"] += 1
         return None, None
 
-    monkeypatch.setattr(chat_api, "complete_with_tools", fake_complete_with_tools)
+    # Patch in the harness module where complete_with_tools is used
+    monkeypatch.setattr("app.agent.harness.complete_with_tools", fake_complete_with_tools)
 
     text, used_fallback, reminder, hitl = chat_api._run_tool_loop(
         messages=[{"role": "user", "content": "write essay"}],
@@ -24,7 +28,7 @@ def test_run_tool_loop_returns_recovery_after_repeated_empty_turns(monkeypatch):
     assert used_fallback is True
     assert reminder is None
     assert hitl is None
-    assert calls["n"] == chat_api.MAX_EMPTY_RESPONSE_RETRIES + 1
+    assert calls["n"] == MAX_EMPTY_RESPONSE_RETRIES + 1
 
 
 def test_complete_chat_does_not_call_ai_fallback_when_loop_returns_text(monkeypatch):

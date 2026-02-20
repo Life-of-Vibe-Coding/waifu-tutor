@@ -105,3 +105,7 @@ outline:
 - **Topic too narrow for requested body_count**: Suggest a smaller body_count or expand to a larger theme with more sub-angles.
 - **User gives conflicting stance**: Use the most recent or explicit stance and note the choice.
 - **Source-based essay**: Weave source_context into body support notes so paragraph-generator can cite or paraphrase.
+
+---
+
+**After producing the outline:** Return to the parent essay-writing skill. This output is internal — do not deliver it as the final response. Reflect: the outline is complete, but the essay is not. Next steps: call `request_human_approval` (HITL), then `load_subskill(essay-writing/paragraph-generator/paragraph-generator.md)` for paragraph generation.
