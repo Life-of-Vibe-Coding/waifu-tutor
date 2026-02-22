@@ -9,12 +9,15 @@ MAX_EMPTY_RESPONSE_RETRIES = 4
 def test_run_tool_loop_returns_recovery_after_repeated_empty_turns(monkeypatch):
     calls = {"n": 0}
 
-    def fake_complete_with_tools(messages, tools):
+    def fake_agent_run(self, agno_msgs, **kwargs):
         calls["n"] += 1
-        return None, None
+        class MockRunOutput:
+            @property
+            def messages(self):
+                return agno_msgs
+        return MockRunOutput()
 
-    # Patch in the harness module where complete_with_tools is used
-    monkeypatch.setattr("app.agent.harness.complete_with_tools", fake_complete_with_tools)
+    monkeypatch.setattr("agno.agent.Agent.run", fake_agent_run)
 
     text, used_fallback, reminder, hitl = chat_api._run_tool_loop(
         messages=[{"role": "user", "content": "write essay"}],

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI test for the skill registry and load_skill/load_subskill tools.
+"""CLI test for the skill registry and chat tools.
 
 Usage (from backend directory):
   uv run python scripts/test_skill_cli.py --chat          # conversational (default)
@@ -19,6 +19,19 @@ from typing import Any
 _BACKEND = Path(__file__).resolve().parent.parent
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
+
+_HIDDEN_TOOLS = {"request_human_approval"}
+
+
+def _filter_hidden_tools_in_text(text: str) -> str:
+    """Remove hidden tool lines from printed/injected context text."""
+    out_lines: list[str] = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if any(stripped.startswith(f"- {name}:") for name in _HIDDEN_TOOLS):
+            continue
+        out_lines.append(line)
+    return "\n".join(out_lines)
 
 
 def prompt_hitl_cli(hitl: dict[str, Any]) -> dict[str, Any]:
@@ -103,15 +116,11 @@ def run_chat() -> int:
     from app.context import (
         append_openviking_text_message,
         build_openviking_chat_context,
-        get_agent_context_text,
-        load_agent_context,
         put_openviking_session,
     )
     from app.core.config import get_settings
-    from app.core.chat_logging import log_chat_agent_input, log_chat_final_response
+    from app.core.chat_logging import log_chat_final_response
 
-    load_agent_context()
-    agent_context = get_agent_context_text()
     session_id = "cli-session"
     user_id = get_settings().demo_user_id
 
@@ -137,23 +146,7 @@ def run_chat() -> int:
         )
         put_openviking_session(ov_session)
 
-        context_block = "\n\n".join(context_texts[:14])
-        system_content = (
-            f"Context:\n{context_block}\n\n"
-            "Instructions:\n"
-            "Reply in character: accurate, helpful, concise, and encouraging. Use tools when appropriate."
-        )
-        if agent_context:
-            system_content = f"{agent_context}\n\n{system_content}"
-        try:
-            log_chat_agent_input(session_id, system_content)
-        except Exception:
-            pass
-
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": line},
-        ]
+        messages: list[dict[str, Any]] = [{"role": "user", "content": line}]
         reply, hitl = run_agentic_loop_cli(messages, session_id, user_id)
         if hitl:
             print("[HITL not resolved in loop – this should not happen]\n")
@@ -202,7 +195,7 @@ def main() -> int:
     parser.add_argument(
         "--skill",
         metavar="NAME",
-        help="One-shot: load this skill and print (default: exam-mode-tuner)",
+        help="One-shot: load this skill and print",
     )
     parser.add_argument(
         "--subskill",
@@ -211,18 +204,25 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    from app.context import get_cached_tools, load_agent_context
     from app.skills.registry import build_skill_registry, get_skill_registry, get_skills_root
-    from app.tool.tools import load_skill, load_subskill
 
     root = get_skills_root()
     build_skill_registry(root)
+    load_agent_context()
     registry = get_skill_registry()
+    tools = [t for t in get_cached_tools() if t.get("name") not in _HIDDEN_TOOLS]
+
+    print("--- Agent CLI Context ---")
+    print(f"Tools ({len(tools)}):")
+    for t in tools:
+        print(f"  - {t.get('name', '')}: {t.get('description', '')}")
 
     print(f"Skills root: {root}")
     print(f"Registered skills ({len(registry)}):")
     for s in registry:
-        desc = s["description"]
-        print(f"  - {s['name']}: {(desc[:57] + '...') if len(desc) > 60 else desc}")
+        print(f"  - {s['name']}: {s['description']}")
+    print("--- End Context ---")
 
     if args.list:
         return 0
@@ -232,35 +232,56 @@ def main() -> int:
         return run_chat()
 
     # One-shot: load skill and optionally subskill
-    skill_name = args.skill or "exam-mode-tuner"
-    print(f"\n--- load_skill({skill_name!r}) ---")
-    result, _ = load_skill.run({"name": skill_name}, "cli-session", "cli-user")
-    data = json.loads(result)
-    if "error" in data:
-        print(f"Error: {data['error']}")
-        return 1
-    content = data.get("content", "")
-    lines = content.strip().split("\n")
-    print(f"OK ({len(content)} chars, {len(lines)} lines)")
-    for line in lines[:20]:
-        print(f"  {line}")
-    if len(lines) > 20:
-        print(f"  ... ({len(lines) - 20} more)")
+    if args.skill:
+        print(f"\n--- skill {args.skill!r} ---")
+        skill_name = (args.skill or "").strip()
+        if not skill_name or "/" in skill_name or "\\" in skill_name or skill_name in (".", ".."):
+            print("Error: invalid skill name")
+            return 1
+        skill_md = root / skill_name / "SKILL.md"
+        if not skill_md.is_file():
+            print(f"Error: skill not found: {skill_name}")
+            return 1
+        content = skill_md.read_text(encoding="utf-8", errors="replace")
+        lines = content.strip().split("\n")
+        print(f"OK ({len(content)} chars, {len(lines)} lines)")
+        for line in lines[:20]:
+            print(f"  {line}")
+        if len(lines) > 20:
+            print(f"  ... ({len(lines) - 20} more)")
 
     if args.subskill:
-        print(f"\n--- load_subskill({args.subskill!r}) ---")
-        result2, _ = load_subskill.run({"path": args.subskill}, "cli-session", "cli-user")
-        data2 = json.loads(result2)
-        if "error" in data2:
-            print(f"Error: {data2['error']}")
+        print(f"\n--- subskill {args.subskill!r} ---")
+        path_str = (args.subskill or "").strip().replace("\\", "/")
+        if not path_str or path_str.startswith("/") or ".." in path_str.split("/"):
+            print("Error: invalid or unsafe subskill path")
             return 1
-        content2 = data2.get("content", "")
+        parts = [p for p in path_str.split("/") if p and p != "."]
+        resolved = root
+        for p in parts:
+            resolved = resolved / p
+        try:
+            resolved = resolved.resolve()
+            root_resolved = root.resolve()
+            if not str(resolved).startswith(str(root_resolved)):
+                print("Error: subskill path escapes skills root")
+                return 1
+        except Exception as e:  # pragma: no cover - defensive
+            print(f"Error: failed to resolve subskill path: {e}")
+            return 1
+        if not resolved.is_file():
+            print(f"Error: subskill not found: {path_str}")
+            return 1
+        content2 = resolved.read_text(encoding="utf-8", errors="replace")
         lines2 = content2.strip().split("\n")
         print(f"OK ({len(content2)} chars, {len(lines2)} lines)")
         for line in lines2[:15]:
             print(f"  {line}")
         if len(lines2) > 15:
             print(f"  ... ({len(lines2) - 15} more)")
+    elif not args.skill:
+        print("\nError: provide --skill and/or --subskill for one-shot mode.")
+        return 1
 
     print("\nDone.")
     return 0

@@ -1,70 +1,31 @@
-"""AI chat via Volcengine ARK (Doubao-Seed-1.8), with fallback and tool calling."""
+"""AI chat via Volcengine ARK (Doubao-Seed-1.8) using Agno, with fallback."""
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-import httpx
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat
 
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-def _volcengine_complete(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
-    """Call Volcengine chat/completions. Returns dict with 'content' (str or None) and 'tool_calls' (list or None)."""
+def get_base_model() -> OpenAIChat:
     settings = get_settings()
-    if not settings.volcengine_api_key:
-        logger.warning("Chat fallback: VOLCENGINE_API_KEY not set in backend .env")
-        return None
-    base = settings.volcengine_chat_base.rstrip("/")
-    url = f"{base}/chat/completions"
-    payload: dict[str, Any] = {"model": settings.chat_model, "messages": messages}
-    if tools:
-        payload["tools"] = tools
-    timeout = get_settings().chat_request_timeout
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            r = client.post(
-                url,
-                headers={"Authorization": f"Bearer {settings.volcengine_api_key}", "Content-Type": "application/json"},
-                json=payload,
-            )
-            if r.status_code != 200:
-                try:
-                    body = r.text[:500] if r.text else ""
-                except Exception:
-                    body = ""
-                logger.warning(
-                    "Chat fallback: Volcengine API returned status %s, body=%s",
-                    r.status_code,
-                    body,
-                )
-                return None
-            data = r.json()
-            msg = (data.get("choices") or [{}])[0].get("message", {})
-            content = (msg.get("content") or "").strip() or None
-            raw_tool_calls = msg.get("tool_calls")
-            tool_calls = None
-            if raw_tool_calls:
-                tool_calls = [
-                    {
-                        "id": tc.get("id", ""),
-                        "type": tc.get("type", "function"),
-                        "function": {
-                            "name": (tc.get("function") or {}).get("name", ""),
-                            "arguments": (tc.get("function") or {}).get("arguments", "{}"),
-                        },
-                    }
-                    for tc in raw_tool_calls
-                ]
-            return {
-                "content": content,
-                "tool_calls": tool_calls,
-            }
-    except Exception as e:
-        logger.warning("Chat fallback: Volcengine request failed: %s", e, exc_info=True)
-        return None
+    conf = settings.openviking_conf()
+    vlm_conf = conf.get("vlm") if isinstance(conf, dict) else {}
+    if not isinstance(vlm_conf, dict):
+        vlm_conf = {}
+    model_id = str(vlm_conf.get("model") or settings.chat_model)
+    api_key = str(vlm_conf.get("api_key") or settings.volcengine_api_key or "sk-fallback")
+    base_url_raw = str(vlm_conf.get("api_base") or settings.volcengine_chat_base)
+    base_url = base_url_raw.rstrip("/") if base_url_raw else settings.volcengine_chat_base.rstrip("/")
+    return OpenAIChat(
+        id=model_id,
+        api_key=api_key,
+        base_url=base_url,
+    )
 
 
 def fallback_chat(prompt: str, context: list[str]) -> str:
@@ -103,22 +64,16 @@ def chat(
         f"User question:\n{prompt}\n\n"
         "Reply in character: accurate, helpful, concise, and encouraging."
     )
-    messages = [{"role": "user", "content": user_content}]
-    out = _volcengine_complete(messages)
-    if out and out.get("content"):
-        return out["content"], False
+    
+    agent = Agent(model=get_base_model(), markdown=True)
+    try:
+        response = agent.run(user_content)
+        if response and response.content:
+            return response.content, False
+    except Exception as e:
+        logger.warning("Chat fallback: Agno request failed: %s", e, exc_info=True)
+        
     return fallback_chat(prompt, context_texts), True
-
-
-def complete_with_tools(
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
-) -> tuple[str | None, list[dict[str, Any]] | None]:
-    """Call Volcengine with tools. Returns (content, tool_calls)."""
-    out = _volcengine_complete(messages, tools=tools)
-    if not out:
-        return None, None
-    return out.get("content"), out.get("tool_calls")
 
 
 def mood_from_text(text: str) -> str:

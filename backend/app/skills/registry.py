@@ -50,7 +50,11 @@ def build_skill_registry(skills_root: Path) -> list[dict[str, Any]]:
             fm = _parse_frontmatter(raw)
             name = fm.get("name") or entry.name
             description = fm.get("description", "").strip() or f"Skill: {entry.name}"
-            _REGISTRY.append({"name": name, "description": description})
+            _REGISTRY.append({
+                "name": name,
+                "description": description,
+                "path": str(skill_md.relative_to(root)),
+            })
         except Exception as e:
             logger.warning("Skip skill %s: %s", entry.name, e)
     logger.info("Skill registry built: %d skill(s) from %s", len(_REGISTRY), root)
