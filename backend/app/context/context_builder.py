@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def load_agent_context() -> None:
-    """Load tools and skill registry via agent harness. Call at application startup."""
+    """Load tools and skill registry via the Agno-backed agent wrapper. Call at application startup."""
     from app.agent import get_default_agent
     from app.skills import get_skill_registry
 

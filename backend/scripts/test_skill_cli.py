@@ -20,7 +20,7 @@ _BACKEND = Path(__file__).resolve().parent.parent
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-_HIDDEN_TOOLS = {"request_human_approval"}
+_HIDDEN_TOOLS: set[str] = set()
 
 
 def _filter_hidden_tools_in_text(text: str) -> str:
@@ -70,30 +70,60 @@ def run_agentic_loop_cli(
     session_id: str,
     user_id: str,
 ) -> tuple[str | None, dict[str, Any] | None]:
-    """Run tool loop via harness; on HITL prompt in CLI and continue. Returns (final_reply, hitl_payload or None)."""
+    """Run tool loop via native agent; on HITL prompt and continue. Returns (final_reply, hitl_payload or None)."""
     from app.agent import get_default_agent
 
-    harness = get_default_agent()
+    agent = get_default_agent()
     while True:
-        reply, used_fallback, reminder, hitl_payload = harness.run(
-            messages, session_id, user_id, user_timezone=None
-        )
-        if hitl_payload is None:
-            return reply, None
-        # HITL: prompt user, append tool result, and resume
-        response = prompt_hitl_cli(hitl_payload)
-        tool_call_id = hitl_payload.get("tool_call_id", "")
-        if response.get("cancelled"):
-            result = json.dumps({"approved": False, "cancelled": True})
-        else:
-            result = json.dumps({
-                "approved": True,
-                "overrides": response.get("overrides"),
-                "selected": response.get("selected"),
-                "free_input": response.get("free_input"),
-            })
-        messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": result})
+        run_res = agent.run(messages, session_id, user_id, user_timezone=None)
+        trace_getter = getattr(agent, "get_last_trace", None)
+        if callable(trace_getter):
+            trace_lines = trace_getter()
+            if trace_lines:
+                print("\n--- Agent execution trace ---")
+                for line in trace_lines:
+                    print(f"  - {line}")
+                print("--- End trace ---")
+        reasoning_getter = getattr(agent, "get_last_reasoning", None)
+        if callable(reasoning_getter):
+            reasoning_lines = reasoning_getter()
+            if reasoning_lines:
+                print("\n--- Agent thought summary ---")
+                for line in reasoning_lines:
+                    print(f"  - {line}")
+                print("--- End thoughts ---")
+        if run_res.hitl_payload is None:
+            return run_res.text, None
+        checkpoint_id = str(run_res.hitl_payload.get("checkpoint_id") or "")
+        if not checkpoint_id:
+            print("[HITL checkpoint missing checkpoint_id]")
+            return None, run_res.hitl_payload
+        response = prompt_hitl_cli(run_res.hitl_payload)
+        from agno.run.requirement import RunRequirement
+        from app.hitl import consume_pending
 
+        pending = consume_pending(checkpoint_id)
+        if not pending:
+            print("[HITL checkpoint expired]")
+            return None, run_res.hitl_payload
+        reqs = [RunRequirement.from_dict(item) for item in (pending.get("requirements") or []) if isinstance(item, dict)]
+        if not reqs:
+            print("[HITL checkpoint missing requirements]")
+            return None, run_res.hitl_payload
+        req = reqs[0]
+        if response.get("cancelled"):
+            req.reject(note="User cancelled")
+        else:
+            req.confirm()
+        run_res = agent.continue_run(
+            run_id=str(pending.get("run_id") or ""),
+            requirements=reqs,
+            session_id=session_id,
+            user_id=user_id,
+            user_timezone=None,
+        )
+        if run_res.hitl_payload is None:
+            return run_res.text, None
 
 def _messages_to_conversation_history(messages: list[dict[str, Any]], max_items: int = 12, max_content_len: int = 1500) -> list[dict[str, str]]:
     """Build conversation_history from tool-loop messages (user/assistant only, truncated) for fallback chat."""

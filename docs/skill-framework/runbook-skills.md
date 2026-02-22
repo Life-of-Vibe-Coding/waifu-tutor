@@ -1,9 +1,10 @@
-# Runbook: Agentic Skills and HITL
+# Runbook: Agentic Skills (Agno Native)
+
+This runbook explains how to define skills and how they are wired into the Agno-backed agent after removing the custom Python harness.
 
 ## Adding a new top-level skill
 
 1. **Create a folder** under the skills root (default: `docs/skill-framework/`) with the skill name, e.g. `my-skill/`.
-
 2. **Add `SKILL.md`** in that folder with YAML frontmatter so the registry picks it up:
    ```yaml
    ---
@@ -16,17 +17,20 @@
    ## Steps
    ...
    ```
-
-3. **Subskills** (optional): Add subfolders under the skill, e.g. `my-skill/phase-a/phase-a.md`. The model loads them on demand via the `load_subskill` tool when the parent skill’s instructions say so. Do not register subskills in the registry.
-
+3. **Subskills** (optional): Add subfolders under the skill, e.g. `my-skill/phase-a/phase-a.md`. Agno’s native skill system (`agno.skills.Skills` + `LocalSkills`) can load these markdown files when the model decides to follow the instructions in your top-level skill. Subskills are not explicitly registered; they are implementation details of the parent.
 4. **Restart** the backend (or rely on startup) so `build_skill_registry()` rescans and injects the new skill into the agent context.
 
-## HITL checkpoints
+## HITL checkpoints (current status)
 
-- The model calls the `request_human_approval` tool with `checkpoint`, `summary`, and optionally `params` and `options`.
-- The agent loop pauses and the frontend shows a modal with summary, params, and options. The user can **Approve**, **Cancel**, or **Select** an option (or send **free_input** if the checkpoint allows it).
-- Resume is done via `POST /api/ai/chat/hitl-response` with `session_id`, `checkpoint_id`, and `response` (e.g. `{ "approved": true }`, `{ "cancelled": true }`, or `{ "selected": "…" }`).
-- Pending checkpoints expire after 30 minutes (configurable in `app/hitl/store.py`).
+- The previous design exposed a `request_human_approval` tool that paused the custom harness loop and surfaced a checkpoint to the user.
+- After migrating to the native Agno agent:
+  - `request_human_approval` is no longer registered as a tool.
+  - The Agno wrapper in `app.agent` does not emit HITL checkpoints; `hitl_payload` is always `None`.
+- Existing components that reference HITL remain in the codebase but are effectively disabled:
+  - backend storage: `backend/app/hitl/store.py`
+  - API resume endpoint: `/api/ai/chat/hitl-response`
+  - frontend modal in `ChatPage` for HITL confirmation.
+- Skill docs may still mention HITL checkpoints as part of the ideal workflow, but they do not correspond to a live tool right now.
 
 ## Configuration
 
@@ -36,7 +40,7 @@
 
 From the **backend** directory:
 
-**Conversational (interactive)** – chat with the agent; skills and tools (including HITL) run in the terminal. Requires `VOLCENGINE_API_KEY` in `.env`.
+**Conversational (interactive)** – chat with the Agno-backed agent; skills and tools run in the terminal. Requires `VOLCENGINE_API_KEY` in `.env`.
 
 ```bash
 cd backend
@@ -45,7 +49,7 @@ uv run python scripts/test_skill_cli.py
 uv run python scripts/test_skill_cli.py --chat
 ```
 
-At the prompt, ask for a practice exam or to load a skill; if the model calls `request_human_approval`, you’ll get a terminal prompt (approve / cancel / option). Type `quit` or `exit` to stop.
+At the prompt, ask for a practice exam or to load a skill. The CLI now performs a single agent turn per user message; HITL checkpoints are not expected because the HITL tool is no longer registered.
 
 **One-shot**
 
@@ -61,5 +65,5 @@ uv run python scripts/test_skill_cli.py --skill exam-mode-tuner --subskill exam-
 
 ## Safety
 
-- **load_subskill**: Only paths under the skills root are allowed; `..` and absolute paths are rejected.
+- **Skill paths**: When resolving subskill paths in tests or utilities, only paths under the skills root are allowed; `..` and absolute paths are rejected.
 - **Registry**: Missing or malformed frontmatter is skipped with a warning; startup does not fail.

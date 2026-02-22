@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from agno.run.requirement import RunRequirement
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -32,7 +33,7 @@ from app.core.chat_logging import (
     log_chat_final_response,
     log_chat_request,
 )
-from app.agent import get_default_agent
+from app.agent import AgentRunResult, get_default_agent
 from app.context import (
     append_openviking_text_message,
     build_openviking_chat_context,
@@ -120,8 +121,8 @@ def _run_tool_loop(
     session_id: str,
     user_id: str,
     user_timezone: str | None = None,
-) -> tuple[str | None, bool, dict[str, Any] | None, dict[str, Any] | None]:
-    """Run agentic tool loop via harness. Returns (reply_text or None, used_fallback, reminder_payload, hitl_payload).
+) -> AgentRunResult:
+    """Run agentic tool loop via harness.
     When hitl_payload is set, reply_text is None and the chat layer must pause and surface the checkpoint.
     """
     return get_default_agent().run(messages, session_id, user_id, user_timezone=user_timezone)
@@ -135,8 +136,8 @@ def _complete_chat(
     session_id: str,
     user_id: str,
     user_timezone: str | None = None,
-) -> tuple[str | None, bool, dict[str, Any] | None, dict[str, Any] | None]:
-    """Run chat completion (native tool loop). Returns (reply_text or None, used_fallback, reminder_payload, hitl_payload).
+) -> AgentRunResult:
+    """Run chat completion (native tool loop).
     When hitl_payload is set, reply_text is None and the client must show the checkpoint and call hitl-response to resume.
     """
     agent_context = get_agent_context_text()
@@ -152,21 +153,26 @@ def _complete_chat(
     except Exception:
         pass
     messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
-    text, used_fallback, reminder_payload, hitl_payload = _run_tool_loop(messages, session_id, user_id, user_timezone)
-    if hitl_payload is not None:
-        return None, False, reminder_payload, hitl_payload
-    if text is not None:
-        return text, used_fallback, reminder_payload, None
+    run_res = _run_tool_loop(messages, session_id, user_id, user_timezone)
+    if run_res.hitl_payload is not None:
+        return run_res
+    if run_res.text is not None:
+        return run_res
     # Fallback when loop ended without content
     fallback_history = _messages_to_conversation_history(messages)
     text, used_fallback = ai_chat(msg, context_texts, attachment_title, conversation_history=fallback_history or history)
     if not (text or "").strip():
         text = "I'm here! Something went wrong on my side—please try again or rephrase."
     try:
-        log_chat_final_response(session_id, text, used_fallback, reminder_payload)
+        log_chat_final_response(session_id, text, used_fallback, run_res.reminder_payload)
     except Exception:
         pass
-    return text, used_fallback, reminder_payload, None
+    return AgentRunResult(
+        text=text,
+        used_fallback=used_fallback,
+        reminder_payload=run_res.reminder_payload,
+        hitl_payload=None,
+    )
 
 
 def _run_chat(body: ChatBody, user_timezone: str | None = None) -> dict[str, Any]:
@@ -187,27 +193,28 @@ def _run_chat(body: ChatBody, user_timezone: str | None = None) -> dict[str, Any
         log_chat_context(session_id, context_texts, attachment_title, "")
     except Exception:
         pass
-    text, used_fallback, reminder, hitl_payload = _complete_chat(
+    run_res = _complete_chat(
         msg, context_texts, attachment_title, effective_history, session_id, user_id,
         user_timezone=user_timezone,
     )
-    if hitl_payload is not None:
+    if run_res.hitl_payload is not None:
         return {
-            "hitl": hitl_payload,
+            "hitl": run_res.hitl_payload,
             "session_id": session_id,
         }
-    mood = mood_from_text(text or "")
-    append_openviking_text_message(session_id, "assistant", text or "")
-    _save_exchange(session_id, msg, text or "")
+    text = run_res.text or ""
+    mood = mood_from_text(text)
+    append_openviking_text_message(session_id, "assistant", text)
+    _save_exchange(session_id, msg, text)
 
     response: dict[str, Any] = {
         "message": {"role": "assistant", "content": text, "created_at": datetime.now(tz=timezone.utc).isoformat()},
         "mood": mood,
         "session_id": session_id,
-        "model_fallback": used_fallback,
+        "model_fallback": run_res.used_fallback,
     }
-    if reminder:
-        response["reminder"] = reminder
+    if run_res.reminder_payload:
+        response["reminder"] = run_res.reminder_payload
     return response
 
 
@@ -253,31 +260,47 @@ def hitl_response(request: Request, body: HitlResponseBody) -> dict[str, Any]:
     entry = consume_pending(body.checkpoint_id)
     if not entry:
         raise_chat_validation(404, ChatErrorCode.INVALID_REQUEST, "Checkpoint expired or not found.")
-    messages: list[dict[str, Any]] = list(entry["messages"])
-    tool_call_id = entry["tool_call_id"]
-    # Build tool result from user response
+    run_id = str(entry.get("run_id") or "")
+    req_items = entry.get("requirements") or []
+    requirements = [RunRequirement.from_dict(item) for item in req_items if isinstance(item, dict)]
+    if not run_id or not requirements:
+        raise_chat_validation(400, ChatErrorCode.INVALID_REQUEST, "Invalid checkpoint payload.")
+
+    target = requirements[0]
     resp = body.response or {}
     if resp.get("cancelled"):
-        tool_result = json.dumps({"approved": False, "cancelled": True})
+        target.reject(note="User cancelled")
     elif resp.get("approved") is not False:
-        tool_result = json.dumps({
-            "approved": True,
-            "overrides": resp.get("overrides"),
+        target.confirm()
+        extras = {
             "selected": resp.get("selected"),
             "free_input": resp.get("free_input"),
-        })
+            "overrides": resp.get("overrides"),
+        }
+        note = {k: v for k, v in extras.items() if v is not None}
+        if note:
+            target.confirmation_note = json.dumps(note)
+            if target.tool_execution is not None:
+                target.tool_execution.confirmation_note = target.confirmation_note
     else:
-        tool_result = json.dumps({"approved": False})
-    messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": tool_result})
+        target.reject(note="User rejected")
+
     session_id = entry["session_id"]
-    text, used_fallback, reminder, hitl_payload = _run_tool_loop(
-        messages, session_id, user_id, user_timezone=user_timezone,
+    run_res = get_default_agent().continue_run(
+        run_id=run_id,
+        requirements=requirements,
+        session_id=session_id,
+        user_id=user_id,
+        user_timezone=user_timezone,
     )
-    if hitl_payload is not None:
-        return {"hitl": hitl_payload, "session_id": session_id}
+    if run_res.hitl_payload is not None:
+        return {"hitl": run_res.hitl_payload, "session_id": session_id}
+    text = run_res.text
+    used_fallback = run_res.used_fallback
+    reminder = run_res.reminder_payload
     if text is None:
         text, _ = ai_chat(
-            messages[0].get("content", "") if messages else "",
+            "",
             [], None, conversation_history=[],
         )
         if not (text or "").strip():
@@ -359,14 +382,17 @@ def chat_stream(request: Request, body: ChatBody) -> StreamingResponse:
                 pass
 
             user_id = _demo_user_id()
-            text, used_fallback, reminder, hitl_payload = _complete_chat(
+            run_res = _complete_chat(
                 msg, context_texts, attachment_title, effective_history, session_id, user_id,
                 user_timezone=user_timezone,
             )
-            if hitl_payload is not None:
-                yield f"event: hitl_checkpoint\ndata: {json.dumps({**hitl_payload, 'stream_id': stream_id})}\n\n"
+            if run_res.hitl_payload is not None:
+                yield f"event: hitl_checkpoint\ndata: {json.dumps({**run_res.hitl_payload, 'stream_id': stream_id})}\n\n"
                 yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'stream_id': stream_id, 'hitl': True})}\n\n"
                 return
+            text = run_res.text
+            used_fallback = run_res.used_fallback
+            reminder = run_res.reminder_payload
             if not (text or "").strip():
                 text = fallback_message
             mood = mood_from_text(text or "")

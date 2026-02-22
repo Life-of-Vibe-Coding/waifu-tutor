@@ -1,4 +1,4 @@
-# How Skills and Tools Are Executed: Hierarchical Skills with HITL
+# How Skills and Tools Are Executed: Hierarchical Skills (Agno Native)
 
 ---
 
@@ -10,7 +10,7 @@ Before diving in, two key distinctions:
 
 | Layer | Examples | What it is | Where it lives |
 |---|---|---|---|
-| **Tools** | `load_skill`, `load_subskill` | Low-level verbs — fixed capabilities baked into the agent | `agent.py` |
+| **Tools** | `set_break_reminder`, `list_recent_uploads` | Low-level verbs — fixed capabilities exposed to Agno | `backend/app/tool/tools/*.py` |
 | **Skills** | `exam-mode-tuner` | High-level recipe — orchestrates subskills for a complete task | `skills/*/SKILL.md` |
 | **Subskills** | `question-generation`, `adaptive-difficulty` | Focused sub-recipes — handle one phase of the parent skill | `skills/*/subskill/*.md` |
 
@@ -20,9 +20,8 @@ The registry reads only YAML frontmatter at startup. Full skill and subskill con
 
 **Core execution model**
 
-1. **One full round has full context.** A skill is executed within one continuous round of execution: tools, subskills, and human-in-the-loop. Within this round, the agent has all the context it needs to complete the skill. HITL pause/resume is part of that same round — the loop resumes with the same `messages`; it does not start a new round.
-
-2. **Exit after completion.** When the skill completes (final assistant content, no tool calls), the loop exits. The next user message starts a fresh `messages` list and a new tool loop. The previous turn’s tool trace is not carried forward — we exit the skill execution context.
+1. A skill is executed within one continuous Agno agent run that can call tools and read skill markdown as needed.
+2. When the skill completes (final assistant content, no further tool calls), the agent run ends. The next user message starts a fresh run; the previous turn’s internal tool trace is not replayed, though user/assistant text history is available.
 
 ---
 
@@ -49,34 +48,19 @@ The model matches intent to `exam-mode-tuner` in the registry and decides to loa
 
 ---
 
-## Phase 3: The Agentic Loop — With HITL Checkpoints
+## Phase 3: The Agentic Loop (inside Agno)
 
-The loop runs as before — `while True`, calling the API until `stop_reason == "end_turn"`. What changes with hierarchical skills and HITL is that the loop now has **two ways to pause**: tool calls (machine-to-machine) and explicit human checkpoints (machine-to-human).
+The old Python `while True` loop has been removed. Instead:
 
-### The Extended Flow
+- The backend sends a single user message to the Agno agent with:
+  - chat + document context
+  - a text summary of available tools and top-level skills.
+- Agno internally:
+  - calls tools via the registered `Function` objects that wrap `execute_tool(...)`
+  - loads skill and subskill markdown as needed through its native skill system
+  - continues until it returns a final assistant message (or nothing).
 
-```
-while True:
-    response = call Claude API
-          │
-          ├── stop_reason == "end_turn"
-          │       └── no pending HITL → return final text  ✓ EXIT
-          │
-          ├── stop_reason == "tool_use"
-          │       ├── load_skill    → read parent SKILL.md
-          │       ├── load_subskill → read subskill .md
-          │       ├── <other tools> → dispatch to handler
-          │       └── append tool_result → loop again
-          │
-          └── stop_reason == "hitl_checkpoint"
-                  └── pause loop, present to user → await input
-                          │
-                          ├── approved  → append confirmation → loop again
-                          ├── modified  → append edited params → loop again
-                          └── cancelled → abort and explain
-```
-
-HITL checkpoints are not a separate stop reason in the raw API — they are a convention built on top of `tool_use`. The model calls a special tool (e.g. `request_human_approval`) whose handler pauses execution and surfaces a prompt to the user rather than returning immediately.
+The Python wrapper in `app.agent` simply builds the Agno agent, calls `agent.run(...)`, and post-processes the result.
 
 ---
 
@@ -109,58 +93,17 @@ Each `load_subskill` call for a subskill follows the same tool round-trip as any
 
 ---
 
-## Phase 5: HITL Checkpoints in Practice
+## Phase 5: HITL Checkpoints (Design vs Current Reality)
 
-HITL checkpoints appear at two kinds of moments: **before consequential actions** and **after significant outputs**.
+The examples in this document (and some skill markdown files) describe explicit HITL checkpoints using a `request_human_approval` tool. That tool and its handler have been removed from the live tool registry.
 
-### Checkpoint Type A — Parameter Confirmation (Before)
+Current behavior:
 
-After loading the parent skill and deriving exam parameters, but before generating questions, the model calls:
+- No tool emits HITL checkpoints.
+- `hitl_payload` from `get_default_agent().run(...)` is always `None`.
+- The backend store (`app/hitl/store.py`), API resume endpoint, and frontend modal exist but are dormant.
 
-```json
-{
-  "name": "request_human_approval",
-  "input": {
-    "checkpoint": "exam_params",
-    "summary": "I'll generate a 10-question adaptive exam covering arrays, linked lists, and trees. Mix: 4 multiple choice, 4 fill-in, 2 short answer. Starting at medium difficulty. Time limit: 35 min. Does this look right?",
-    "params": {
-      "question_count": 10,
-      "types": ["choice", "fill_blank", "short_answer"],
-      "difficulty": "adaptive",
-      "time_limit_min": 35,
-      "concepts": ["arrays", "linked lists", "trees"]
-    }
-  }
-}
-```
-
-The loop **pauses**. The handler surfaces this to the user as a structured prompt. Possible responses:
-
-- **Approved** → `tool_result` returns `{ "approved": true }` → loop continues into question generation.
-- **Modified** → user says "make it 15 questions, no essays" → `tool_result` returns `{ "approved": true, "overrides": { "question_count": 15, "types": ["choice", "fill_blank"] } }` → model incorporates changes before calling load_subskill.
-- **Cancelled** → loop aborts cleanly.
-
-### Checkpoint Type B — Output Review (After)
-
-After `performance-analytics` produces its report, but before the model recommends a follow-up skill, it surfaces:
-
-```json
-{
-  "name": "request_human_approval",
-  "input": {
-    "checkpoint": "post_exam_routing",
-    "summary": "You scored 75%. Weak areas: tree traversal, graph BFS. I'd suggest moving to memory-comprehension-coach to consolidate these. Want to proceed, pick a different path, or stop here?",
-    "options": [
-      "→ memory-comprehension-coach (consolidate weak areas)",
-      "→ study-guide-creator (full restudy)",
-      "→ exam-mode-tuner again (harder test)",
-      "Stop here"
-    ]
-  }
-}
-```
-
-The user's choice becomes the `tool_result`. The model uses it to decide whether to load a new top-level skill or exit — making cross-skill routing a human decision rather than a fully automated one.
+So, treat the HITL examples as **design references** for a future iteration where HITL might be reintroduced, not as a description of how the system behaves today.
 
 ---
 
@@ -200,20 +143,20 @@ Subskills are loaded exactly when needed. Humans are consulted exactly when the 
 
 ## Context Persistence and Subskill Execution
 
-When a task requires **multiple subskill checks** (e.g. load parent → read subskill A → HITL → read subskill B), context persistence and correct execution behave as follows.
+When a task requires **multiple subskill checks** (e.g. parent skill → subskill A → subskill B), context and execution behave as follows.
 
-### Within one chat run / tool loop: **yes**
+### Within one agent run: **yes**
 
-The same `messages` list is reused across rounds. `_run_tool_loop` appends each assistant turn (including `tool_calls`) and each `tool` result to `messages`, then passes that list to the next API call. So multiple subskill reads and tool rounds chain in a single execution without losing context (`backend/app/api/chat.py`, loop around lines 127–201).
-
-### Across HITL pause / resume: **yes**
-
-When the model calls `request_human_approval`, the handler stores the full loop state (including `messages`, `tool_call_id`, `session_id`, `user_id`) via `set_pending` (`backend/app/hitl/store.py`). On `POST /api/ai/chat/hitl-response`, the backend loads that state with `consume_pending`, appends the user’s synthetic tool result to the stored `messages`, and calls `_run_tool_loop` again. Execution resumes from the exact point where it paused (`backend/app/api/chat.py`, ~182–192 for store, ~343–369 for resume).
+- Agno maintains its own message history, including tool calls and results, for the duration of the run.
+- Multiple skill loads and subskill reads occur in one run without losing context.
 
 ### Across separate user turns: **limited**
 
-Persisted chat storage (and the history the client sends on the next request) contains only **user and assistant text messages**, not the internal tool trace. Each new user message starts a fresh `messages` list built from the current prompt and the client-provided `history`; the previous turn’s tool-call chain is not replayed. So on a later user turn, the model may need to re-read the top-level skill or subskills to continue correctly (`backend/app/api/chat.py`, e.g. `_complete_chat` building `messages` from a single user content block and `_messages_to_conversation_history` stripping tool messages for fallback).
+- Persisted chat storage (and the history the client sends on the next request) contains only **user and assistant text messages**, not the internal tool trace.
+- Each new user message starts a fresh agent run built from the current prompt and the client-provided `history`; the previous turn’s internal tool-call chain is not replayed.
 
-### Correct execution of subskills: **prompt-guided, not enforced**
+### Correct execution of subskills: **prompt-guided**
 
-When `load_skill` succeeds, the backend injects a system prompt that displays the full SKILL.md content and enforces the use of `load_subskill` when the skill directs to a subskill. The model must not fabricate subskill outputs or skip checkpoints. There is **no server-side orchestrator** that validates that every required subskill step was actually performed. Long-horizon correctness across turns therefore depends on model behavior unless you add explicit step/state enforcement (`backend/app/api/chat.py`, `_ensure_skill_execution_context`).
+- Skill docs still define the expected steps, including when to consult subskills.
+- There is no server-side orchestrator that verifies that every substep was followed.
+- Long-horizon correctness across turns depends on clear skill instructions and model behavior.

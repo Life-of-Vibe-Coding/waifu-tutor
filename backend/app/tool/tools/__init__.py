@@ -58,7 +58,6 @@ def execute_tool(
         return result, None, None
 
     result, break_payload = module.run(args, session_id, user_id, user_timezone=user_timezone)
-    hitl_payload: dict[str, Any] | None = None
     try:
         log_tool_call(
             session_id,
@@ -70,4 +69,4 @@ def execute_tool(
         )
     except Exception:
         pass
-    return result, break_payload, hitl_payload
+    return result, break_payload, None

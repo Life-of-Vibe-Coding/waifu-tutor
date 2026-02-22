@@ -21,13 +21,13 @@ def main() -> int:
     parser.add_argument(
         "--prompt",
         default="Use the registered exam-mode-tuner skill and summarize step 1 in one short sentence.",
-        help="Prompt to run through the agent harness",
+        help="Prompt to run through the Agno-backed agent",
     )
     parser.add_argument("--skill", default="exam-mode-tuner", help="Skill name to validate in native registration")
     parser.add_argument(
         "--live-agent",
         action="store_true",
-        help="Also run a real model turn through harness.run (requires working provider config)",
+        help="Also run a real model turn through get_default_agent().run (requires working provider config)",
     )
     parser.add_argument("--session-id", default="agno-skill-smoke-session")
     parser.add_argument("--user-id", default="agno-skill-smoke-user")
@@ -49,8 +49,8 @@ def main() -> int:
     if args.list_only:
         return 0
 
-    harness = get_default_agent()
-    agno_skills = getattr(harness, "_agno_skills", None)
+    agent = get_default_agent()
+    agno_skills = getattr(agent, "_agno_skills", None)
     if agno_skills is None:
         print("ERROR: native Agno skills are not initialized on harness.")
         return 2
@@ -66,21 +66,21 @@ def main() -> int:
         return 0
 
     messages = [
-        {"role": "system", "content": harness.get_agent_context_text()},
+        {"role": "system", "content": agent.get_agent_context_text()},
         {"role": "user", "content": args.prompt},
     ]
     try:
-        reply, used_fallback, _, hitl_payload = harness.run(messages, args.session_id, args.user_id)
+        run_res = agent.run(messages, args.session_id, args.user_id)
     except Exception as exc:
         print(f"ERROR: live agent run failed: {exc}")
         return 4
 
-    print(f"Used fallback: {used_fallback}")
-    if hitl_payload:
-        print(f"HITL requested: {hitl_payload.get('type')}")
-    print(f"Reply: {reply or '<empty>'}")
+    print(f"Used fallback: {run_res.used_fallback}")
+    if run_res.hitl_payload:
+        print(f"HITL requested: {run_res.hitl_payload.get('type')}")
+    print(f"Reply: {run_res.text or '<empty>'}")
 
-    if not reply and not hitl_payload:
+    if not run_res.text and not run_res.hitl_payload:
         print("ERROR: empty response.")
         return 5
     return 0

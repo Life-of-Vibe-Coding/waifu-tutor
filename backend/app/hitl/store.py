@@ -15,9 +15,8 @@ _TTL_SEC = 30 * 60  # 30 minutes
 def set_pending(
     session_id: str,
     user_id: str,
-    messages: list[dict[str, Any]],
-    tool_call_id: str,
-    hitl_input: dict[str, Any],
+    run_id: str,
+    requirements: list[dict[str, Any]],
     user_timezone: str | None = None,
 ) -> str:
     """Store pending HITL state. Returns checkpoint_id."""
@@ -27,9 +26,8 @@ def set_pending(
         "session_id": session_id,
         "user_id": user_id,
         "user_timezone": user_timezone,
-        "messages": messages,
-        "tool_call_id": tool_call_id,
-        "hitl_input": hitl_input,
+        "run_id": run_id,
+        "requirements": requirements,
         "created_at": time.monotonic(),
     }
     logger.info("HITL pending set: checkpoint_id=%s session_id=%s", checkpoint_id, session_id)

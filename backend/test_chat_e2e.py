@@ -16,6 +16,6 @@ res = _complete_chat(
     user_timezone="UTC"
 )
 
-print(f"Chat Response: {res[0]}")
-if res[3]:
-    print(f"HITL Payload Triggered: {res[3]}")
+print(f"Chat Response: {res.text}")
+if res.hitl_payload:
+    print(f"HITL Payload Triggered: {res.hitl_payload}")
